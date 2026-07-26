@@ -5,6 +5,5 @@ target
 **/mutants.out*/
 .idea/
 .cursor/
-.vscode/
 roadmap.md
 /target

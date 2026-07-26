@@ -1,0 +1,20 @@
+{
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit",
+    "source.removeUnusedImports": "explicit",
+    "source.sortImports": "explicit"
+  },
+  "rust-analyzer.rustfmt.extraArgs": [
+    "+nightly"
+  ],
+  "editor.detectIndentation": false,
+  "editor.formatOnSave": true,
+  "editor.tabSize": 2,
+  "files.trimTrailingWhitespace": true,
+  "files.trimFinalNewlines": true,
+  "files.insertFinalNewline": true,
+  "git.inputValidation": true,
+  "git.inputValidationLength": 70,
+  "git.inputValidationSubjectLength": 70,
+  "git.ignoreLimitWarning": true
+}

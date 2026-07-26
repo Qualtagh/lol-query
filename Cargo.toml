@@ -1,6 +1,7 @@
 [package]
 name = "lol_query"
 version = "0.1.0"
+description = "jQuery-like API based on lol-html"
 edition = "2024"
 
 [dependencies]
