@@ -1,6 +1,7 @@
 {
   "recommendations": [
+    "barbosshack.crates-io",
     "rust-lang.rust-analyzer",
-    "barbosshack.crates-io"
+    "tamasfe.even-better-toml"
   ]
 }
