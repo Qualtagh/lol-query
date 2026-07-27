@@ -10,12 +10,14 @@ use crate::SettingsExt;
 struct Capture {
     each: bool,
     text: bool,
+    comment: bool,
 }
 
 impl Capture {
-    const BOTH: Self = Self { each: true, text: true };
-    const EACH: Self = Self { each: true, text: false };
-    const TEXT: Self = Self { each: false, text: true };
+    const ALL: Self = Self { each: true, text: true, comment: true };
+    const COMMENT: Self = Self { each: false, text: false, comment: true };
+    const EACH: Self = Self { each: true, text: false, comment: false };
+    const TEXT: Self = Self { each: false, text: true, comment: false };
 }
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -43,6 +45,16 @@ fn attach(matcher: Matcher, log: Log, capture: Capture) -> Vec<crate::HandlerEnt
             log.borrow_mut().push(s.to_string());
         });
     }
+    if capture.comment {
+        let log = log.clone();
+        matcher = matcher.on_comment(move |comment| {
+            let s = comment.text();
+            if s.is_empty() {
+                return;
+            }
+            log.borrow_mut().push(s);
+        });
+    }
     matcher.build()
 }
 
@@ -61,8 +73,12 @@ fn check_text(matcher: Matcher, html: &str, expected: &str) {
     run(vec![matcher], html, Capture::TEXT, expected);
 }
 
-fn check_both(matcher: Matcher, html: &str, expected: &str) {
-    run(vec![matcher], html, Capture::BOTH, expected);
+fn check_comment(matcher: Matcher, html: &str, expected: &str) {
+    run(vec![matcher], html, Capture::COMMENT, expected);
+}
+
+fn check_all(matcher: Matcher, html: &str, expected: &str) {
+    run(vec![matcher], html, Capture::ALL, expected);
 }
 
 #[test]
@@ -168,10 +184,11 @@ fn matcher() {
         "a b",
     );
 
-    // build paths — css/filter/chain x on_each/on_text_chunk/both
+    // build paths — css/filter/chain x on_each/on_text_chunk/on_comment/all
     check(Matcher::new().css("p"), r#"<p id="a"></p><div id="x"></div>"#, "a");
     check_text(Matcher::new().css("p"), r#"<p>hi</p><div>x</div>"#, "hi");
-    check_both(Matcher::new().css("p"), r#"<p id="a">one</p><p id="b">two</p><div id="x">three</div>"#, "a one b two");
+    check_comment(Matcher::new().css("p"), r#"<p><!--note--></p><div><!--skip--></div>"#, "note");
+    check_all(Matcher::new().css("p"), r#"<p id="a">one<!--c1--></p><div id="x">skip<!--miss--></div><p id="b">two<!--c2--></p>"#, "a one c1 b two c2");
 
     check(
         Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
@@ -183,19 +200,38 @@ fn matcher() {
         r#"<span data-x="main">yes</span><span data-x="other">no</span>"#,
         "yes",
     );
-    check_both(
+    check_comment(
         Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
-        r#"<span data-x="main" id="a">yes</span><span id="b">no</span>"#,
-        "a yes",
+        r#"<span data-x="main"><!--yes--></span><span data-x="other"><!--no--></span>"#,
+        "yes",
+    );
+    check_all(
+        Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
+        r#"<span data-x="main" id="a"><!--c1-->yes</span><span id="b">no<!--c2--></span>"#,
+        "a c1 yes",
     );
 
     check(Matcher::new().css(".root").css("span"), r#"<div class="root"><span id="a"></span></div><span id="b"></span>"#, "a");
     check_text(Matcher::new().css(".root").css("span"), r#"<div class="root">outer<span>inner</span></div><span>other</span>"#, "inner");
-    check_both(Matcher::new().css(".root").css("span"), r#"<div class="root">outer<span id="a">inner</span></div><span id="b">other</span>"#, "a inner");
+    check_comment(Matcher::new().css(".root").css("span"), r#"<div class="root">outer<span><!--inner--></span></div><span><!--other--></span>"#, "inner");
+    check_all(
+        Matcher::new().css(".root").css("span"),
+        r#"<div class="root">outer<span id="a">inner<!--c1--></span><!--div comment--></div><span id="b">other<!--c2--></span>"#,
+        "a inner c1",
+    );
 
     // on_text_chunk() — text in nested elements is included
     check_text(Matcher::new().css("p"), r#"<p>one <b>two</b></p>"#, "one  two");
 
     // on_text_chunk() — text outside the excluded selector
     check_text(Matcher::new().not(Matcher::new().css("a")), r#"<a>skip</a><span>keep</span>"#, "keep");
+
+    // on_comment() — comments in nested elements are included
+    check_comment(Matcher::new().css("p"), r#"<p><!--one--><b><!--two--></b></p>"#, "one two");
+
+    // on_comment() — comments outside the excluded selector
+    check_comment(Matcher::new().not(Matcher::new().css("a")), r#"<a><!--skip--></a><span><!--keep--></span>"#, "keep");
+
+    // on_comment() — comment inside a comment
+    check_comment(Matcher::new().css("a"), r#"<a><!--outer <!--inner--></a><span><!--skip--></span>"#, "outer <!--inner");
 }

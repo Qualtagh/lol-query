@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use lol_html::html_content::{Element, EndTag, TextChunk};
-use lol_html::{HandlerResult, LocalHandlerTypes, element, text};
+use lol_html::html_content::{Comment, Element, EndTag, TextChunk};
+use lol_html::{HandlerResult, LocalHandlerTypes, comments, element, text};
 
 use crate::HandlerEntry;
 
@@ -16,6 +16,9 @@ impl<F: for<'r, 't> FnMut(&mut El<'r, 't>) + 'static> Callback for F {}
 
 trait TextCallback: FnMut(&mut TextChunk<'_>) + 'static {}
 impl<F: FnMut(&mut TextChunk<'_>) + 'static> TextCallback for F {}
+
+trait CommentCallback: FnMut(&mut Comment<'_>) + 'static {}
+impl<F: FnMut(&mut Comment<'_>) + 'static> CommentCallback for F {}
 
 /// One link of a [`Matcher`] ancestry chain.
 enum Step {
@@ -95,6 +98,8 @@ struct State {
     open: Vec<Vec<u32>>,
     /// The number of still open elements that matched the root chain and own text callbacks.
     text_open: u32,
+    /// The number of still open elements that matched the root chain and own comment callbacks.
+    comment_open: u32,
 }
 
 /// Validates a matcher passed to [`Matcher::not`], [`Matcher::every`] or [`Matcher::any`].
@@ -102,6 +107,7 @@ fn nested(matcher: Matcher) -> Matcher {
     assert!(!matcher.steps.is_empty(), "a nested matcher needs at least one selector");
     assert!(matcher.callback.is_none(), "a nested matcher must not have an on_each() callback");
     assert!(matcher.text_callback.is_none(), "a nested matcher must not have an on_text_chunk() callback");
+    assert!(matcher.comment_callback.is_none(), "a nested matcher must not have an on_comment() callback");
     matcher
 }
 
@@ -146,6 +152,7 @@ pub struct Matcher {
     steps: Vec<Step>,
     callback: Option<Box<dyn Callback>>,
     text_callback: Option<Box<dyn TextCallback>>,
+    comment_callback: Option<Box<dyn CommentCallback>>,
 }
 
 impl Default for Matcher {
@@ -158,7 +165,7 @@ impl Default for Matcher {
 impl Matcher {
     /// Creates a new [`Matcher`] builder.
     pub fn new() -> Self {
-        Matcher { steps: vec![], callback: None, text_callback: None }
+        Matcher { steps: vec![], callback: None, text_callback: None, comment_callback: None }
     }
 
     /// Selects elements matching `selector` that also satisfy `predicate`.
@@ -190,7 +197,10 @@ impl Matcher {
 
     /// Appends a link to the ancestry chain.
     fn step(mut self, step: Step) -> Self {
-        assert!(self.callback.is_none() && self.text_callback.is_none(), "selectors must be added before on_each() or on_text_chunk()");
+        assert!(
+            self.callback.is_none() && self.text_callback.is_none() && self.comment_callback.is_none(),
+            "selectors must be added before on_each(), on_text_chunk() or on_comment()"
+        );
         self.steps.push(step);
         self
     }
@@ -213,10 +223,22 @@ impl Matcher {
         self
     }
 
+    /// Registers `callback` to run for each HTML comment inside elements matched by the whole chain,
+    /// like the [`comments!`](lol_html::comments) macro.
+    pub fn on_comment(mut self, callback: impl CommentCallback) -> Self {
+        assert!(!self.steps.is_empty(), "on_comment() requires a selector to be added first");
+        assert!(self.comment_callback.is_none(), "on_comment() can only be called once");
+        self.comment_callback = Some(Box::new(callback));
+        self
+    }
+
     /// Consumes the builder and returns [`HandlerEntry`]s for use with
     /// [`SettingsExt::add_handlers`](crate::SettingsExt::add_handlers).
     pub fn build(self) -> Vec<HandlerEntry<'static, 'static>> {
-        assert!(self.callback.is_some() || self.text_callback.is_some(), "build() requires on_each() or on_text_chunk()");
+        assert!(
+            self.callback.is_some() || self.text_callback.is_some() || self.comment_callback.is_some(),
+            "build() requires on_each(), on_text_chunk() or on_comment()"
+        );
         assert!(!self.steps.is_empty(), "build() requires a selector to be added first");
         if self.steps.len() == 1 && matches!(&self.steps[0], Step::Filter(_, _)) {
             return self.build_single();
@@ -225,7 +247,7 @@ impl Matcher {
     }
 
     fn build_single(self) -> Vec<HandlerEntry<'static, 'static>> {
-        let Matcher { steps, callback, text_callback } = self;
+        let Matcher { steps, callback, text_callback, comment_callback } = self;
         let Step::Filter(selector, predicate) = steps.into_iter().next().unwrap() else { unreachable!() };
         if predicate.is_none() {
             let mut handlers = vec![];
@@ -247,11 +269,20 @@ impl Matcher {
                     .into(),
                 );
             }
+            if let Some(mut comment_callback) = comment_callback {
+                handlers.push(
+                    comments!(selector.as_str(), move |comment: &mut Comment<'_>| -> HandlerResult {
+                        comment_callback(comment);
+                        Ok(())
+                    })
+                    .into(),
+                );
+            }
             return handlers;
         }
         let predicate = predicate.unwrap();
-        if text_callback.is_none() {
-            let mut callback = callback.expect("build() requires on_each() or on_text_chunk()");
+        if text_callback.is_none() && comment_callback.is_none() {
+            let mut callback = callback.expect("build() requires on_each(), on_text_chunk() or on_comment()");
             return vec![element!(selector.as_str(), move |el: &mut El<'_, '_>| -> HandlerResult {
                 if !predicate(el) { return Ok(()) };
                 callback(el);
@@ -263,7 +294,6 @@ impl Matcher {
         let mut handlers = vec![];
         let active_for_el = active.clone();
         let mut callback = callback;
-        let mut text_callback = text_callback.expect("build() requires on_each() or on_text_chunk()");
         handlers.push(
             element!(selector.as_str(), move |el: &mut El<'_, '_>| -> HandlerResult {
                 let ok = predicate(el);
@@ -283,19 +313,33 @@ impl Matcher {
             })
             .into(),
         );
-        handlers.push(
-            text!(selector.as_str(), move |chunk: &mut TextChunk<'_>| -> HandlerResult {
-                if !*active.borrow() { return Ok(()) };
-                text_callback(chunk);
-                Ok(())
-            })
-            .into(),
-        );
+        if let Some(mut text_callback) = text_callback {
+            let active = active.clone();
+            handlers.push(
+                text!(selector.as_str(), move |chunk: &mut TextChunk<'_>| -> HandlerResult {
+                    if !*active.borrow() { return Ok(()) };
+                    text_callback(chunk);
+                    Ok(())
+                })
+                .into(),
+            );
+        }
+        if let Some(mut comment_callback) = comment_callback {
+            let active = active.clone();
+            handlers.push(
+                comments!(selector.as_str(), move |comment: &mut Comment<'_>| -> HandlerResult {
+                    if !*active.borrow() { return Ok(()) };
+                    comment_callback(comment);
+                    Ok(())
+                })
+                .into(),
+            );
+        }
         handlers
     }
 
     fn build_chain(self) -> Vec<HandlerEntry<'static, 'static>> {
-        let Matcher { steps, callback, text_callback } = self;
+        let Matcher { steps, callback, text_callback, comment_callback } = self;
         let mut program = Program::default();
         let root = program.add(steps);
         let Program { chains, leaves, universal } = program;
@@ -304,6 +348,7 @@ impl Matcher {
             matched: vec![false; chains.len()],
             open: chains.iter().map(|chain| vec![0; chain.len()]).collect(),
             text_open: 0,
+            comment_open: 0,
         }));
 
         // Elements are matched selector by selector, and the leaf hits are combined into
@@ -326,8 +371,9 @@ impl Matcher {
 
         // Without a not() there is nothing to match on an element that no selector hit.
         let scope = if universal { "*" } else { union.as_str() };
-        let scope_for_text = scope.to_string();
+        let scope_for_content = scope.to_string();
         let has_text = text_callback.is_some();
+        let has_comment = comment_callback.is_some();
         let shared_for_combine = shared.clone();
         let mut callback = callback;
         let combine = element!(scope, move |el: &mut El<'_, '_>| -> HandlerResult {
@@ -364,12 +410,23 @@ impl Matcher {
               if let Some(callback) = callback.as_mut() {
                   callback(el);
               }
-              if has_text {
-                state.text_open += 1;
+              if has_text || has_comment {
+                if has_text {
+                  state.text_open += 1;
+                }
+                if has_comment {
+                  state.comment_open += 1;
+                }
                 if let Some(end_tag_handlers) = el.end_tag_handlers() {
                     let shared = shared_for_combine.clone();
                     end_tag_handlers.push(Box::new(move |_: &mut EndTag<'_>| {
-                        shared.borrow_mut().text_open -= 1;
+                        let state = &mut *shared.borrow_mut();
+                        if has_text {
+                          state.text_open -= 1;
+                        }
+                        if has_comment {
+                          state.comment_open -= 1;
+                        }
                         Ok(())
                     }));
                 }
@@ -381,9 +438,20 @@ impl Matcher {
         if let Some(mut text_callback) = text_callback {
             let shared = shared.clone();
             handlers.push(
-                text!(scope_for_text.as_str(), move |chunk: &mut TextChunk<'_>| -> HandlerResult {
+                text!(scope_for_content.as_str(), move |chunk: &mut TextChunk<'_>| -> HandlerResult {
                     if shared.borrow().text_open == 0 { return Ok(()) };
                     text_callback(chunk);
+                    Ok(())
+                })
+                .into(),
+            );
+        }
+        if let Some(mut comment_callback) = comment_callback {
+            let shared = shared.clone();
+            handlers.push(
+                comments!(scope_for_content.as_str(), move |comment: &mut Comment<'_>| -> HandlerResult {
+                    if shared.borrow().comment_open == 0 { return Ok(()) };
+                    comment_callback(comment);
                     Ok(())
                 })
                 .into(),
