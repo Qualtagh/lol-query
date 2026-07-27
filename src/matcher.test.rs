@@ -10,14 +10,16 @@ use crate::SettingsExt;
 struct Capture {
     each: bool,
     text: bool,
+    aggregated_text: bool,
     comment: bool,
 }
 
 impl Capture {
-    const ALL: Self = Self { each: true, text: true, comment: true };
-    const COMMENT: Self = Self { each: false, text: false, comment: true };
-    const EACH: Self = Self { each: true, text: false, comment: false };
-    const TEXT: Self = Self { each: false, text: true, comment: false };
+    const AGGREGATED_TEXT: Self = Self { each: false, text: false, aggregated_text: true, comment: false };
+    const ALL: Self = Self { each: true, text: true, aggregated_text: true, comment: true };
+    const COMMENT: Self = Self { each: false, text: false, aggregated_text: false, comment: true };
+    const EACH: Self = Self { each: true, text: false, aggregated_text: false, comment: false };
+    const TEXT: Self = Self { each: false, text: true, aggregated_text: false, comment: false };
 }
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -43,6 +45,15 @@ fn attach(matcher: Matcher, log: Log, capture: Capture) -> Vec<crate::HandlerEnt
                 return;
             }
             log.borrow_mut().push(s.to_string());
+        });
+    }
+    if capture.aggregated_text {
+        let log = log.clone();
+        matcher = matcher.on_text(move |text| {
+            if text.is_empty() {
+                return;
+            }
+            log.borrow_mut().push(text.to_string());
         });
     }
     if capture.comment {
@@ -71,6 +82,10 @@ fn check(matcher: Matcher, html: &str, expected: &str) {
 
 fn check_text(matcher: Matcher, html: &str, expected: &str) {
     run(vec![matcher], html, Capture::TEXT, expected);
+}
+
+fn check_aggregated(matcher: Matcher, html: &str, expected: &str) {
+    run(vec![matcher], html, Capture::AGGREGATED_TEXT, expected);
 }
 
 fn check_comment(matcher: Matcher, html: &str, expected: &str) {
@@ -184,11 +199,12 @@ fn matcher() {
         "a b",
     );
 
-    // build paths — css/filter/chain x on_each/on_text_chunk/on_comment/all
+    // build paths — css/filter/chain x on_each/on_text_chunk/on_comment/on_text/all
     check(Matcher::new().css("p"), r#"<p id="a"></p><div id="x"></div>"#, "a");
-    check_text(Matcher::new().css("p"), r#"<p>hi</p><div>x</div>"#, "hi");
+    check_text(Matcher::new().css("p"), r#"<p>hi<b>there</b></p><div>x</div>"#, "hi there");
+    check_aggregated(Matcher::new().css("p"), r#"<p>hi<b>there</b></p><div>x</div>"#, "hithere");
     check_comment(Matcher::new().css("p"), r#"<p><!--note--></p><div><!--skip--></div>"#, "note");
-    check_all(Matcher::new().css("p"), r#"<p id="a">one<!--c1--></p><div id="x">skip<!--miss--></div><p id="b">two<!--c2--></p>"#, "a one c1 b two c2");
+    check_all(Matcher::new().css("p"), r#"<p id="a">one<!--c1--></p><div id="x">skip<!--miss--></div><p id="b">two<!--c2--></p>"#, "a one c1 one b two c2 two");
 
     check(
         Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
@@ -197,8 +213,13 @@ fn matcher() {
     );
     check_text(
         Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
-        r#"<span data-x="main">yes</span><span data-x="other">no</span>"#,
-        "yes",
+        r#"<span data-x="main"><b>answer:</b>yes</span><span data-x="other">no</span>"#,
+        "answer: yes",
+    );
+    check_aggregated(
+        Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
+        r#"<span data-x="main"><b>answer:</b>yes</span><span data-x="other">no</span>"#,
+        "answer:yes",
     );
     check_comment(
         Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
@@ -208,16 +229,25 @@ fn matcher() {
     check_all(
         Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
         r#"<span data-x="main" id="a"><!--c1-->yes</span><span id="b">no<!--c2--></span>"#,
-        "a c1 yes",
+        "a c1 yes yes",
     );
 
     check(Matcher::new().css(".root").css("span"), r#"<div class="root"><span id="a"></span></div><span id="b"></span>"#, "a");
-    check_text(Matcher::new().css(".root").css("span"), r#"<div class="root">outer<span>inner</span></div><span>other</span>"#, "inner");
+    check_text(
+        Matcher::new().css(".root").css("span"),
+        r#"<div class="root">outer<span>inner</span><span>inner<b>2</b></span></div><span>other</span>"#,
+        "inner inner 2",
+    );
+    check_aggregated(
+        Matcher::new().css(".root").css("span"),
+        r#"<div class="root">outer<span>inner</span><span>inner<b>2</b></span></div><span>other</span>"#,
+        "inner inner2",
+    );
     check_comment(Matcher::new().css(".root").css("span"), r#"<div class="root">outer<span><!--inner--></span></div><span><!--other--></span>"#, "inner");
     check_all(
         Matcher::new().css(".root").css("span"),
         r#"<div class="root">outer<span id="a">inner<!--c1--></span><!--div comment--></div><span id="b">other<!--c2--></span>"#,
-        "a inner c1",
+        "a inner c1 inner",
     );
 
     // on_text_chunk() — text in nested elements is included
@@ -225,6 +255,24 @@ fn matcher() {
 
     // on_text_chunk() — text outside the excluded selector
     check_text(Matcher::new().not(Matcher::new().css("a")), r#"<a>skip</a><span>keep</span>"#, "keep");
+
+    // on_text() — descendant text is concatenated once per matched element
+    check_aggregated(Matcher::new().css("p"), r#"<p>one <b>two</b></p>"#, "one two");
+
+    // on_text() — no space is inserted between sibling elements (cheerio textContent)
+    check_aggregated(Matcher::new().css("div"), r#"<div>alpha<b>beta</b>gamma</div>"#, "alphabetagamma");
+
+    // on_text() — nested matches emit once per element
+    check_aggregated(Matcher::new().css("div"), r#"<div>outer<div>inner</div></div>"#, "inner outerinner");
+
+    // on_text_chunk() vs on_text() — chunks are per text node, on_text is per element
+    check_all(Matcher::new().css("p"), r#"<p id="a">one<b>two</b></p>"#, "a one two onetwo");
+
+    // on_text() — text outside the excluded selector
+    check_aggregated(Matcher::new().not(Matcher::new().css("a")), r#"<a>skip</a><span>keep</span>"#, "keep");
+
+    // on_text() — chained selector
+    check_aggregated(Matcher::new().css(".root").css("span"), r#"<div class="root">outer<span>inner</span></div><span>other</span>"#, "inner");
 
     // on_comment() — comments in nested elements are included
     check_comment(Matcher::new().css("p"), r#"<p><!--one--><b><!--two--></b></p>"#, "one two");
