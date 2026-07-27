@@ -101,8 +101,10 @@ struct State {
     open: Vec<Vec<u32>>,
     /// The number of still open elements that matched the root chain and own text callbacks.
     text_open: u32,
-    /// Accumulators for [`Matcher::on_text`], one per open matched element (outermost last).
-    text_buffers: Vec<String>,
+    /// Text chunks seen under currently open [`Matcher::on_text`] matches; each chunk is stored once.
+    text_chunks: Vec<String>,
+    /// For each open [`Matcher::on_text`] match (outermost last): start index into [`Self::text_chunks`].
+    text_starts: Vec<usize>,
     /// The number of still open elements that matched the root chain and own comment callbacks.
     comment_open: u32,
 }
@@ -364,7 +366,8 @@ impl Matcher {
             matched: vec![false; chains.len()],
             open: chains.iter().map(|chain| vec![0; chain.len()]).collect(),
             text_open: 0,
-            text_buffers: vec![],
+            text_chunks: vec![],
+            text_starts: vec![],
             comment_open: 0,
         }));
 
@@ -434,7 +437,7 @@ impl Matcher {
                 if track_text {
                   state.text_open += 1;
                   if has_aggregated_text {
-                    state.text_buffers.push(String::new());
+                    state.text_starts.push(state.text_chunks.len());
                   }
                 }
                 if has_comment {
@@ -447,7 +450,15 @@ impl Matcher {
                         let state = &mut *shared.borrow_mut();
                         if track_text {
                           if has_aggregated_text {
-                            let text = state.text_buffers.pop().unwrap();
+                            let start = state.text_starts.pop().unwrap();
+                            let len = state.text_chunks[start..].iter().map(String::len).sum();
+                            let mut text = String::with_capacity(len);
+                            for chunk in &state.text_chunks[start..] {
+                              text.push_str(chunk);
+                            }
+                            if state.text_starts.is_empty() {
+                              state.text_chunks.clear();
+                            }
                             aggregated_text_callback.as_ref().unwrap().borrow_mut()(&text);
                           }
                           state.text_open -= 1;
@@ -473,10 +484,7 @@ impl Matcher {
                         text_callback(chunk);
                     }
                     if has_aggregated_text {
-                        let s = chunk.as_str();
-                        for buf in shared.borrow_mut().text_buffers.iter_mut() {
-                            buf.push_str(s);
-                        }
+                        shared.borrow_mut().text_chunks.push(chunk.as_str().to_owned());
                     }
                     Ok(())
                 })
