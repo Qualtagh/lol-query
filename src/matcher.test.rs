@@ -6,7 +6,19 @@ use lol_html::{HtmlRewriter, Settings};
 use super::Matcher;
 use crate::SettingsExt;
 
-type Ids = Rc<RefCell<Vec<String>>>;
+#[derive(Clone, Copy)]
+struct Capture {
+    each: bool,
+    text: bool,
+}
+
+impl Capture {
+    const BOTH: Self = Self { each: true, text: true };
+    const EACH: Self = Self { each: true, text: false };
+    const TEXT: Self = Self { each: false, text: true };
+}
+
+type Log = Rc<RefCell<Vec<String>>>;
 
 fn exec(handlers: Vec<crate::HandlerEntry<'static, 'static>>, html: &str) {
     let mut out = vec![];
@@ -15,22 +27,42 @@ fn exec(handlers: Vec<crate::HandlerEntry<'static, 'static>>, html: &str) {
     rw.end().unwrap();
 }
 
-fn check(matcher: Matcher, html: &str, expected: &str) {
-    check_all(vec![matcher], html, expected);
+fn attach(matcher: Matcher, log: Log, capture: Capture) -> Vec<crate::HandlerEntry<'static, 'static>> {
+    let mut matcher = matcher;
+    if capture.each {
+        let log = log.clone();
+        matcher = matcher.on_each(move |el| log.borrow_mut().push(el.get_attribute("id").unwrap_or_default()));
+    }
+    if capture.text {
+        let log = log.clone();
+        matcher = matcher.on_text_chunk(move |chunk| {
+            let s = chunk.as_str();
+            if s.is_empty() {
+                return;
+            }
+            log.borrow_mut().push(s.to_string());
+        });
+    }
+    matcher.build()
 }
 
-/// Collects the ids reported by all `matchers` sharing one rewriter.
-fn check_all(matchers: Vec<Matcher>, html: &str, expected: &str) {
-    let ids: Ids = Rc::new(RefCell::new(vec![]));
-    let handlers = matchers
-        .into_iter()
-        .flat_map(|matcher| {
-            let capture = ids.clone();
-            matcher.on_each(move |el| capture.borrow_mut().push(el.get_attribute("id").unwrap_or_default())).build()
-        })
-        .collect();
+fn run(matchers: Vec<Matcher>, html: &str, capture: Capture, expected: &str) {
+    let log: Log = Rc::new(RefCell::new(vec![]));
+    let handlers = matchers.into_iter().flat_map(|matcher| attach(matcher, log.clone(), capture)).collect();
     exec(handlers, html);
-    assert_eq!(ids.borrow().join(" "), expected);
+    assert_eq!(log.borrow().join(" "), expected);
+}
+
+fn check(matcher: Matcher, html: &str, expected: &str) {
+    run(vec![matcher], html, Capture::EACH, expected);
+}
+
+fn check_text(matcher: Matcher, html: &str, expected: &str) {
+    run(vec![matcher], html, Capture::TEXT, expected);
+}
+
+fn check_both(matcher: Matcher, html: &str, expected: &str) {
+    run(vec![matcher], html, Capture::BOTH, expected);
 }
 
 #[test]
@@ -129,9 +161,41 @@ fn matcher() {
     );
 
     // several matchers keep their own ancestry when added to the same rewriter
-    check_all(
+    run(
         vec![Matcher::new().css("div").css("i"), Matcher::new().css("section").css("i")],
         r#"<div><i id="a"></i></div><section><i id="b"></i></section><i id="x"></i>"#,
+        Capture::EACH,
         "a b",
     );
+
+    // build paths — css/filter/chain x on_each/on_text_chunk/both
+    check(Matcher::new().css("p"), r#"<p id="a"></p><div id="x"></div>"#, "a");
+    check_text(Matcher::new().css("p"), r#"<p>hi</p><div>x</div>"#, "hi");
+    check_both(Matcher::new().css("p"), r#"<p id="a">one</p><p id="b">two</p><div id="x">three</div>"#, "a one b two");
+
+    check(
+        Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
+        r#"<span data-x="main" id="a"></span><span id="b"></span>"#,
+        "a",
+    );
+    check_text(
+        Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
+        r#"<span data-x="main">yes</span><span data-x="other">no</span>"#,
+        "yes",
+    );
+    check_both(
+        Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
+        r#"<span data-x="main" id="a">yes</span><span id="b">no</span>"#,
+        "a yes",
+    );
+
+    check(Matcher::new().css(".root").css("span"), r#"<div class="root"><span id="a"></span></div><span id="b"></span>"#, "a");
+    check_text(Matcher::new().css(".root").css("span"), r#"<div class="root">outer<span>inner</span></div><span>other</span>"#, "inner");
+    check_both(Matcher::new().css(".root").css("span"), r#"<div class="root">outer<span id="a">inner</span></div><span id="b">other</span>"#, "a inner");
+
+    // on_text_chunk() — text in nested elements is included
+    check_text(Matcher::new().css("p"), r#"<p>one <b>two</b></p>"#, "one  two");
+
+    // on_text_chunk() — text outside the excluded selector
+    check_text(Matcher::new().not(Matcher::new().css("a")), r#"<a>skip</a><span>keep</span>"#, "keep");
 }
