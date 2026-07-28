@@ -1,3 +1,4 @@
+mod general_regex;
 mod matcher;
 mod settings;
 

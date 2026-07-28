@@ -96,6 +96,44 @@ fn check_all(matcher: Matcher, html: &str, expected: &str) {
     run(vec![matcher], html, Capture::ALL, expected);
 }
 
+fn nested_html(depth: usize) -> String {
+    let mut html = String::with_capacity(depth * 32);
+    for level in 0..depth {
+        let class = if level == 0 {
+            "root"
+        } else if level == depth / 3 {
+            "red"
+        } else if level == depth * 2 / 3 {
+            "blue"
+        } else if level + 1 == depth {
+            "target"
+        } else {
+            "node"
+        };
+        html.push_str("<div class=\"");
+        html.push_str(class);
+        html.push_str("\">");
+    }
+    html.push_str(&"</div>".repeat(depth));
+    html
+}
+
+fn matcher_operation_count(depth: usize) -> usize {
+    let matches = Rc::new(RefCell::new(0));
+    let matches_for_callback = matches.clone();
+    let handlers = Matcher::new()
+        .css(".root")
+        .gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")])
+        .css(".target")
+        .on_each(move |_| *matches_for_callback.borrow_mut() += 1)
+        .build();
+
+    crate::general_regex::reset_operation_count();
+    exec(handlers, &nested_html(depth));
+    assert_eq!(*matches.borrow(), 1);
+    crate::general_regex::operation_count()
+}
+
 #[test]
 fn matcher() {
     // css() — simple tag selector
@@ -135,6 +173,13 @@ fn matcher() {
 
     // chain — three levels
     check(Matcher::new().css("ul").css("li").css("b"), r#"<ul><li><b id="a"></b></li></ul><li><b id="b"></b></li>"#, "a");
+
+    // chain — repeated universal selectors still consume distinct ancestry levels
+    check(
+        Matcher::new().css("*").css("*").css("*"),
+        r#"<main id="x"><section id="y"><i id="a"></i><b id="b"><u id="c"></u></b></section></main><aside id="z"></aside>"#,
+        "a b c",
+    );
 
     // chain — an ancestor stops matching once it is closed
     check(Matcher::new().css("div").css("span"), r#"<div><span id="a"></span></div><span id="b"></span>"#, "a");
@@ -189,6 +234,94 @@ fn matcher() {
         Matcher::new().any(vec![Matcher::new().css("main"), Matcher::new().css("aside")]).css("img"),
         r#"<main><img id="a"></main><aside><img id="b"></aside><div><img id="x"></div>"#,
         "a b",
+    );
+
+    // gap_without() — empty and clear gaps match, a blocked ancestor does not
+    check(
+        Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target"),
+        r#"<div class="root"><i class="target" id="a"></i><section><i class="target" id="b"></i></section><section class="blocked"><i class="target" id="x"></i></section><section class="blocked"></section><i class="target" id="c"></i></div>"#,
+        "a b c",
+    );
+
+    // gap_without() — the two boundary elements are not part of the gap
+    check(
+        Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target"),
+        r#"<div class="root blocked"><i class="target blocked" id="a"></i></div>"#,
+        "a",
+    );
+
+    // gap_without() — a leading gap constrains the whole ancestry before the final selector
+    check(
+        Matcher::new().gap_without(Matcher::new().css(".blocked")).css(".target"),
+        r#"<section><i class="target" id="a"></i></section><section class="blocked"><i class="target" id="x"></i></section><i class="target blocked" id="b"></i>"#,
+        "a b",
+    );
+
+    // Consecutive gaps are concatenated, so their order can affect the match.
+    check(
+        Matcher::new().gap_without(Matcher::new().css(".x")).gap_without(Matcher::new().css(".y")).css(".target"),
+        r#"<div class="y"><div class="x"><i class="target" id="a"></i></div></div><div class="x"><div class="y"><i class="target" id="x"></i></div></div><div><i class="target" id="b"></i></div>"#,
+        "a b",
+    );
+
+    // gap_without() — the nested matcher may itself be a combinator
+    check(
+        Matcher::new()
+            .css(".root")
+            .gap_without(Matcher::new().every(vec![
+                Matcher::new().css(".marker"),
+                Matcher::new().not(Matcher::new().css(".allowed")),
+            ]))
+            .css(".target"),
+        r#"<div class="root"><section class="marker allowed"><i class="target" id="a"></i></section><section class="marker"><i class="target" id="x"></i></section></div>"#,
+        "a",
+    );
+
+    // gap_with_any() — at least one matching intermediate ancestor is required
+    check(
+        Matcher::new().css(".root").gap_with_any(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")]).css(".target"),
+        r#"<div class="root"><section class="red"><i class="target" id="a"></i></section><section class="blue"><i class="target" id="b"></i></section><section><i class="target" id="x"></i></section><i class="target red" id="y"></i></div>"#,
+        "a b",
+    );
+
+    // gap_with_every() — requirements may occur in either order or on one element
+    check(
+        Matcher::new().css(".root").gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")]).css(".target"),
+        r#"<div class="root"><section class="red"><b class="blue"><i class="target" id="a"></i></b></section><section class="blue"><b class="red"><i class="target" id="b"></i></b></section><section class="red blue"><i class="target" id="c"></i></section><section class="red"><i class="target" id="x"></i></section><section class="blue"><i class="target" id="y"></i></section></div>"#,
+        "a b c",
+    );
+
+    // Different gap kinds may be concatenated; each consumes its own part of the ancestry.
+    check(
+        Matcher::new()
+            .css(".root")
+            .gap_with_any(vec![Matcher::new().css(".a")])
+            .gap_with_every(vec![Matcher::new().css(".b"), Matcher::new().css(".c")])
+            .css(".target"),
+        r#"<div class="root"><section class="a"><div class="b"><div class="c"><i class="target" id="a"></i></div></div></section><section class="a"><div class="c"><div class="b"><i class="target" id="b"></i></div></div></section><section class="a"><div class="b c"><i class="target" id="c"></i></div></section><section class="b"><div class="c"><div class="a"><i class="target" id="x"></i></div></div></section><section class="a b c"><i class="target" id="y"></i></section></div>"#,
+        "a b c",
+    );
+
+    // Multiple constrained gaps compose with nested ancestry matchers.
+    check(
+        Matcher::new().every(vec![
+            Matcher::new().css(".target"),
+            Matcher::new()
+                .css(".root")
+                .gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")])
+                .css(".middle")
+                .gap_without(Matcher::new().any(vec![Matcher::new().css(".blocked"), Matcher::new().css(".hidden")]))
+                .css(".target"),
+        ]),
+        r#"<div class="root"><div class="red"><div class="blue"><section class="middle"><div><i class="target" id="a"></i></div><div class="blocked"><i class="target" id="x"></i></div></section></div></div><div class="red"><section class="middle"><i class="target" id="y"></i></section></div></div>"#,
+        "a",
+    );
+
+    // Gap selectors use the same element, text and comment callback path.
+    check_all(
+        Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target"),
+        r#"<div class="root"><section><i class="target" id="a">keep<!--note--></i></section><section class="blocked"><i class="target" id="x">skip<!--miss--></i></section></div>"#,
+        "a keep note keep",
     );
 
     // several matchers keep their own ancestry when added to the same rewriter
@@ -282,4 +415,16 @@ fn matcher() {
 
     // on_comment() — comment inside a comment
     check_comment(Matcher::new().css("a"), r#"<a><!--outer <!--inner--></a><span><!--skip--></span>"#, "outer <!--inner");
+}
+
+#[test]
+fn matcher_asymptotic_complexity() {
+    // D = N here: every element except the deepest one is an ancestor.
+    // Doubling N must exactly double the number of DFA transitions.
+    let depths = [32, 64, 128, 256, 512];
+    let baseline = matcher_operation_count(depths[0]);
+    assert!(baseline > 0);
+    for depth in depths.into_iter().skip(1) {
+        assert_eq!(matcher_operation_count(depth) * depths[0], baseline * depth);
+    }
 }

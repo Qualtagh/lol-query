@@ -5,6 +5,7 @@ use lol_html::html_content::{Comment, Element, EndTag, TextChunk};
 use lol_html::{HandlerResult, LocalHandlerTypes, comments, element, text};
 
 use crate::HandlerEntry;
+use crate::general_regex::{GenRegExp, Pattern};
 
 type El<'r, 't> = Element<'r, 't, LocalHandlerTypes>;
 
@@ -34,11 +35,24 @@ enum Step {
     Every(Vec<Matcher>),
     /// Elements that at least one of the nested matchers matches.
     Any(Vec<Matcher>),
+    /// A gap containing no element matched by the nested matcher.
+    GapWithout(Matcher),
+    /// A gap containing matches for every nested matcher, in any order.
+    GapWithEvery(Vec<Matcher>),
+    /// A gap containing an element matched by at least one nested matcher.
+    GapWithAny(Vec<Matcher>),
+}
+
+impl Step {
+    fn is_gap(&self) -> bool {
+        matches!(self, Step::GapWithout(_) | Step::GapWithEvery(_) | Step::GapWithAny(_))
+    }
 }
 
 /// A [`Step`] compiled into indices into [`State`].
 enum Test {
     Leaf(usize),
+    Chain(usize),
     Not(usize),
     Every(Vec<usize>),
     Any(Vec<usize>),
@@ -49,6 +63,7 @@ impl Test {
     fn holds(&self, state: &State) -> bool {
         match self {
             Test::Leaf(leaf) => state.hits[*leaf],
+            Test::Chain(chain) => state.matched[*chain],
             Test::Not(chain) => !state.matched[*chain],
             Test::Every(chains) => chains.iter().all(|&chain| state.matched[chain]),
             Test::Any(chains) => chains.iter().any(|&chain| state.matched[chain]),
@@ -56,22 +71,63 @@ impl Test {
     }
 }
 
-/// A whole [`Matcher`] tree flattened into ancestry chains of [`Test`]s.
+/// One matcher chain compiled into tests and a bitset regular expression.
+struct CompiledChain {
+    tests: Vec<Test>,
+    regexp: GenRegExp,
+}
+
+impl CompiledChain {
+    fn symbol(&self, state: &State) -> Vec<u64> {
+        let mut symbol = vec![0; self.tests.len().div_ceil(u64::BITS as usize)];
+        for (bit, test) in self.tests.iter().enumerate() {
+            if !test.holds(state) {
+                continue;
+            }
+            symbol[bit / u64::BITS as usize] |= 1 << (bit % u64::BITS as usize);
+        }
+        symbol
+    }
+}
+
+/// A whole [`Matcher`] tree flattened into dependency-ordered ancestry chains.
 #[derive(Default)]
 struct Program {
     /// Every chain is preceded by the chains it refers to, so the root chain comes last.
-    chains: Vec<Vec<Test>>,
+    chains: Vec<CompiledChain>,
     /// The selector and the predicate behind each [`Test::Leaf`].
     leaves: Vec<(String, Option<Box<dyn Predicate>>)>,
-    /// Whether some test has to be evaluated for elements that no selector matches.
-    universal: bool,
 }
 
 impl Program {
     /// Compiles `steps` into a chain and returns its index.
     fn add(&mut self, steps: Vec<Step>) -> usize {
-        let chain = steps.into_iter().map(|step| self.compile(step)).collect();
-        self.chains.push(chain);
+        let mut tests = vec![];
+        let mut patterns = vec![];
+        let mut has_element = false;
+        let mut has_gap = false;
+        for step in steps {
+            if step.is_gap() {
+                patterns.push(self.compile_gap(step, &mut tests));
+                has_gap = true;
+                continue;
+            }
+
+            if !has_gap {
+                patterns.push(Pattern::universal());
+            }
+            let test = self.compile(step);
+            let bit = tests.len();
+            tests.push(test);
+            patterns.push(Pattern::bit(bit));
+            has_element = true;
+            has_gap = false;
+        }
+        assert!(has_element, "a matcher needs at least one selector");
+        assert!(!has_gap, "a gap selector must be followed by an element selector");
+
+        let expression = Pattern::sequence(patterns);
+        self.chains.push(CompiledChain { tests, regexp: GenRegExp::new(expression) });
         self.chains.len() - 1
     }
 
@@ -81,13 +137,46 @@ impl Program {
                 self.leaves.push((selector, predicate));
                 Test::Leaf(self.leaves.len() - 1)
             },
-            Step::Not(matcher) => {
-                self.universal = true;
-                Test::Not(self.add(matcher.steps))
-            },
+            Step::Not(matcher) => Test::Not(self.add(matcher.steps)),
             Step::Every(matchers) => Test::Every(matchers.into_iter().map(|matcher| self.add(matcher.steps)).collect()),
             Step::Any(matchers) => Test::Any(matchers.into_iter().map(|matcher| self.add(matcher.steps)).collect()),
+            Step::GapWithout(_) | Step::GapWithEvery(_) | Step::GapWithAny(_) => unreachable!(),
         }
+    }
+
+    fn compile_gap(&mut self, step: Step, tests: &mut Vec<Test>) -> Pattern {
+        match step {
+            Step::GapWithout(matcher) => {
+                let bit = self.add_nested_test(matcher, tests);
+                Pattern::not_bit(bit).repeat()
+            },
+            Step::GapWithEvery(matchers) => {
+                let requirements = matchers
+                    .into_iter()
+                    .map(|matcher| {
+                        let bit = self.add_nested_test(matcher, tests);
+                        Pattern::sequence(vec![Pattern::universal(), Pattern::bit(bit), Pattern::universal()])
+                    })
+                    .collect();
+                Pattern::intersection(requirements)
+            },
+            Step::GapWithAny(matchers) => {
+                let alternatives = matchers
+                    .into_iter()
+                    .map(|matcher| {
+                        let bit = self.add_nested_test(matcher, tests);
+                        Pattern::bit(bit)
+                    })
+                    .collect();
+                Pattern::sequence(vec![Pattern::universal(), Pattern::choice(alternatives), Pattern::universal()])
+            },
+            Step::Filter(_, _) | Step::Not(_) | Step::Every(_) | Step::Any(_) => unreachable!(),
+        }
+    }
+
+    fn add_nested_test(&mut self, matcher: Matcher, tests: &mut Vec<Test>) -> usize {
+        tests.push(Test::Chain(self.add(matcher.steps)));
+        tests.len() - 1
     }
 }
 
@@ -97,8 +186,8 @@ struct State {
     hits: Vec<bool>,
     /// Per chain: whether it matches the element currently being handled.
     matched: Vec<bool>,
-    /// Per chain level: the number of still open elements matched at that level.
-    open: Vec<Vec<u32>>,
+    /// Per chain: the DFA state after consuming the currently open ancestry.
+    regexp_states: Vec<usize>,
     /// The number of still open elements that matched the root chain and own text callbacks.
     text_open: u32,
     /// Text chunks seen under currently open [`Matcher::on_text`] matches; each chunk is stored once.
@@ -109,9 +198,10 @@ struct State {
     comment_open: u32,
 }
 
-/// Validates a matcher passed to [`Matcher::not`], [`Matcher::every`] or [`Matcher::any`].
+/// Validates a matcher nested inside a selector or gap constraint.
 fn nested(matcher: Matcher) -> Matcher {
     assert!(!matcher.steps.is_empty(), "a nested matcher needs at least one selector");
+    assert!(!matcher.steps.last().unwrap().is_gap(), "a nested matcher cannot end with a gap selector");
     assert!(matcher.callback.is_none(), "a nested matcher must not have an on_each() callback");
     assert!(matcher.text_callback.is_none(), "a nested matcher must not have an on_text_chunk() callback");
     assert!(matcher.aggregated_text_callback.is_none(), "a nested matcher must not have an on_text() callback");
@@ -120,7 +210,7 @@ fn nested(matcher: Matcher) -> Matcher {
 }
 
 /// Builder for advanced element matching: CSS selectors, custom predicates, ancestry
-/// chains and boolean combinators.
+/// chains, constrained gaps and boolean combinators.
 ///
 /// # Example: ancestry and combinators
 ///
@@ -204,6 +294,26 @@ impl Matcher {
         self.step(Step::Any(matchers.into_iter().map(nested).collect()))
     }
 
+    /// Constrains the gap before the next selector to contain no element
+    /// matched by `matcher`. The gap may be empty.
+    pub fn gap_without(self, matcher: Matcher) -> Self {
+        self.gap(Step::GapWithout(nested(matcher)))
+    }
+
+    /// Constrains the gap before the next selector to contain at least one
+    /// match for every nested matcher, in any order.
+    pub fn gap_with_every(self, matchers: Vec<Matcher>) -> Self {
+        assert!(!matchers.is_empty(), "gap_with_every() requires at least one matcher");
+        self.gap(Step::GapWithEvery(matchers.into_iter().map(nested).collect()))
+    }
+
+    /// Constrains the gap before the next selector to contain at least one
+    /// match for any of the nested matchers.
+    pub fn gap_with_any(self, matchers: Vec<Matcher>) -> Self {
+        assert!(!matchers.is_empty(), "gap_with_any() requires at least one matcher");
+        self.gap(Step::GapWithAny(matchers.into_iter().map(nested).collect()))
+    }
+
     /// Appends a link to the ancestry chain.
     fn step(mut self, step: Step) -> Self {
         assert!(
@@ -211,6 +321,16 @@ impl Matcher {
             "selectors must be added before callbacks"
         );
         self.steps.push(step);
+        self
+    }
+
+    /// Appends a constrained gap to the ancestry chain.
+    fn gap(mut self, gap: Step) -> Self {
+        assert!(
+            self.callback.is_none() && self.text_callback.is_none() && self.aggregated_text_callback.is_none() && self.comment_callback.is_none(),
+            "selectors must be added before callbacks"
+        );
+        self.steps.push(gap);
         self
     }
 
@@ -258,6 +378,7 @@ impl Matcher {
             "build() requires on_each(), on_text_chunk(), on_text() or on_comment()"
         );
         assert!(!self.steps.is_empty(), "build() requires a selector to be added first");
+        assert!(!self.steps.last().unwrap().is_gap(), "a gap selector must be followed by an element selector");
         if self.aggregated_text_callback.is_none() && self.steps.len() == 1 && matches!(&self.steps[0], Step::Filter(_, _)) {
             return self.build_single();
         }
@@ -360,11 +481,11 @@ impl Matcher {
         let Matcher { steps, callback, text_callback, aggregated_text_callback, comment_callback } = self;
         let mut program = Program::default();
         let root = program.add(steps);
-        let Program { chains, leaves, universal } = program;
+        let Program { mut chains, leaves } = program;
         let shared = Rc::new(RefCell::new(State {
             hits: vec![false; leaves.len()],
             matched: vec![false; chains.len()],
-            open: chains.iter().map(|chain| vec![0; chain.len()]).collect(),
+            regexp_states: chains.iter().map(|chain| chain.regexp.start_state()).collect(),
             text_open: 0,
             text_chunks: vec![],
             text_starts: vec![],
@@ -374,7 +495,6 @@ impl Matcher {
         // Elements are matched selector by selector, and the leaf hits are combined into
         // chain matches afterwards, hence the two rounds of handlers. Handlers run in
         // registration order, so the second round sees all hits of the current element.
-        let union = leaves.iter().map(|(selector, _)| selector.as_str()).collect::<Vec<_>>().join(", ");
         let mut handlers: Vec<HandlerEntry<'static, 'static>> = leaves
             .into_iter()
             .enumerate()
@@ -389,9 +509,6 @@ impl Matcher {
             })
             .collect();
 
-        // Without a not() there is nothing to match on an element that no selector hit.
-        let scope = if universal { "*" } else { union.as_str() };
-        let scope_for_content = scope.to_string();
         let has_text_chunk = text_callback.is_some();
         let has_aggregated_text = aggregated_text_callback.is_some();
         let track_text = has_text_chunk || has_aggregated_text;
@@ -399,33 +516,24 @@ impl Matcher {
         let shared_for_combine = shared.clone();
         let mut callback = callback;
         let aggregated_text_callback = aggregated_text_callback.map(|callback| Rc::new(RefCell::new(callback)));
-        let combine = element!(scope, move |el: &mut El<'_, '_>| -> HandlerResult {
-            let mut opened = vec![];
+        let combine = element!("*", move |el: &mut El<'_, '_>| -> HandlerResult {
             let state = &mut *shared_for_combine.borrow_mut();
+            let parent_states = state.regexp_states.clone();
+            let mut child_states = Vec::with_capacity(chains.len());
             state.matched.fill(false);
-            for (index, chain) in chains.iter().enumerate() {
-                for (level, test) in chain.iter().enumerate() {
-                    // An element is never its own ancestor: levels are opened only once all of them are resolved.
-                    if !test.holds(state) || level > 0 && state.open[index][level - 1] == 0 { continue };
-                    if level + 1 == chain.len() {
-                      state.matched[index] = true;
-                    } else {
-                      opened.push((index, level));
-                    }
-                }
+            for (index, chain) in chains.iter_mut().enumerate() {
+                let symbol = chain.symbol(state);
+                let next = chain.regexp.transition(parent_states[index], &symbol);
+                state.matched[index] = chain.regexp.is_match(next);
+                child_states.push(next);
             }
             // This handler is the last one to run for the element, so hits can be recycled here.
             state.hits.fill(false);
-            if !opened.is_empty() && let Some(end_tag_handlers) = el.end_tag_handlers() {
-                for &(index, level) in &opened {
-                  state.open[index][level] += 1;
-                }
+            if let Some(end_tag_handlers) = el.end_tag_handlers() {
+                state.regexp_states = child_states;
                 let shared = shared_for_combine.clone();
                 end_tag_handlers.push(Box::new(move |_: &mut EndTag<'_>| {
-                    let state = &mut *shared.borrow_mut();
-                    for (index, level) in opened {
-                      state.open[index][level] -= 1;
-                    }
+                    shared.borrow_mut().regexp_states = parent_states;
                     Ok(())
                 }));
             }
@@ -478,7 +586,7 @@ impl Matcher {
             let shared = shared.clone();
             let mut text_callback = text_callback;
             handlers.push(
-                text!(scope_for_content.as_str(), move |chunk: &mut TextChunk<'_>| -> HandlerResult {
+                text!("*", move |chunk: &mut TextChunk<'_>| -> HandlerResult {
                     if shared.borrow().text_open == 0 { return Ok(()) };
                     if let Some(text_callback) = text_callback.as_mut() {
                         text_callback(chunk);
@@ -494,7 +602,7 @@ impl Matcher {
         if let Some(mut comment_callback) = comment_callback {
             let shared = shared.clone();
             handlers.push(
-                comments!(scope_for_content.as_str(), move |comment: &mut Comment<'_>| -> HandlerResult {
+                comments!("*", move |comment: &mut Comment<'_>| -> HandlerResult {
                     if shared.borrow().comment_open == 0 { return Ok(()) };
                     comment_callback(comment);
                     Ok(())
