@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use lol_html::html_content::ContentType;
 use lol_html::{HtmlRewriter, Settings};
 
 use super::Matcher;
@@ -109,6 +110,18 @@ fn check_all(matcher: Matcher, html: &str, expected_each: &str, expected_comment
         text: Some(expected_text),
         text_chunk: Some(expected_text_chunk),
     });
+}
+
+fn rewrite(handlers: Vec<crate::HandlerEntry<'static, 'static>>, html: &str) -> String {
+    let mut out = vec![];
+    let mut rw = HtmlRewriter::new(Settings::new().add_handlers(handlers), |c: &[u8]| out.extend_from_slice(c));
+    rw.write(html.as_bytes()).unwrap();
+    rw.end().unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+fn check_html(matcher: Matcher, html: &str, expected: &str) {
+    assert_eq!(rewrite(matcher.build(), html), expected);
 }
 
 fn nested_html(depth: usize) -> String {
@@ -588,4 +601,134 @@ fn matcher_asymptotic_complexity() {
     for depth in depths.into_iter().skip(1) {
         assert_eq!(matcher_operation_count(depth) * depths[0], baseline * depth);
     }
+}
+
+#[test]
+fn matcher_modifications() {
+    // css() — set_attribute()
+    check_html(
+        Matcher::new().css("i").on_each(|el| {
+            el.set_attribute("class", "done").unwrap();
+        }),
+        r#"<i id="a"></i><b id="b"></b>"#,
+        r#"<i id="a" class="done"></i><b id="b"></b>"#,
+    );
+
+    // chain — set_inner_content()
+    check_html(
+        Matcher::new().css(".root").css(".target").on_each(|el| {
+            el.set_inner_content("X", ContentType::Html);
+        }),
+        r#"<div class="root"><i class="target">old</i></div><i class="target">skip</i>"#,
+        r#"<div class="root"><i class="target">X</i></div><i class="target">skip</i>"#,
+    );
+
+    // filter() — remove_attribute()
+    check_html(
+        Matcher::new().filter("i", |el| el.get_attribute("data-x").as_deref() == Some("main")).on_each(|el| el.remove_attribute("data-x")),
+        r#"<i data-x="main" id="a"></i><i data-x="other" id="b"></i>"#,
+        r#"<i id="a"></i><i data-x="other" id="b"></i>"#,
+    );
+
+    // not() — replace()
+    check_html(
+        Matcher::new().not(Matcher::new().css(".skip")).on_each(|el| {
+            el.replace("<section/>", ContentType::Html);
+        }),
+        r#"<div id="a"></div><div class="skip" id="b"></div>"#,
+        r#"<section/><div class="skip" id="b"></div>"#,
+    );
+
+    // gap_without() — append()
+    check_html(
+        Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target").on_each(|el| el.append("!", ContentType::Text)),
+        r#"<div class="root"><i class="target">a</i><section class="blocked"><i class="target">x</i></section><i class="target">b</i></div>"#,
+        r#"<div class="root"><i class="target">a!</i><section class="blocked"><i class="target">x</i></section><i class="target">b!</i></div>"#,
+    );
+
+    // gap_with_every() — prepend()
+    check_html(
+        Matcher::new()
+            .css(".root")
+            .gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")])
+            .css(".target")
+            .on_each(|el| el.prepend("*", ContentType::Text)),
+        r#"<div class="root"><section class="red"><b class="blue"><i class="target">a</i></b></section><section class="red"><i class="target">x</i></section></div>"#,
+        r#"<div class="root"><section class="red"><b class="blue"><i class="target">*a</i></b></section><section class="red"><i class="target">x</i></section></div>"#,
+    );
+
+    // gap_with_any() — after()
+    check_html(
+        Matcher::new()
+            .css(".root")
+            .gap_with_any(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")])
+            .css(".target")
+            .on_each(|el| el.after("<mark/>", ContentType::Html)),
+        r#"<div class="root"><section class="red"><i class="target">a</i></section><section><i class="target">x</i></section></div>"#,
+        r#"<div class="root"><section class="red"><i class="target">a</i><mark/></section><section><i class="target">x</i></section></div>"#,
+    );
+
+    // every() — set_attribute()
+    check_html(
+        Matcher::new().every(vec![Matcher::new().css(".item"), Matcher::new().not(Matcher::new().css("span"))]).on_each(|el| {
+            el.set_attribute("data-done", "1").unwrap();
+        }),
+        r#"<div class="item" id="a"></div><div id="b"></div><span class="item" id="c"></span>"#,
+        r#"<div class="item" id="a" data-done="1"></div><div id="b"></div><span class="item" id="c"></span>"#,
+    );
+
+    // any() — remove()
+    check_html(
+        Matcher::new().any(vec![Matcher::new().css(".a"), Matcher::new().css(".b")]).on_each(|el| el.remove()),
+        r#"<div class="a" id="x"></div><span class="b" id="y"></span><p id="z"></p>"#,
+        r#"<p id="z"></p>"#,
+    );
+
+    // direct() — before()
+    check_html(
+        Matcher::new().css(".a").direct().css(".b").on_each(|el| {
+            el.before("<mark/>", ContentType::Html);
+        }),
+        r#"<div class="a"><span class="b"></span></div><span class="b"></span>"#,
+        r#"<div class="a"><mark/><span class="b"></span></div><span class="b"></span>"#,
+    );
+
+    // nested combinators — remove_and_keep_content()
+    check_html(
+        Matcher::new()
+            .every(vec![
+                Matcher::new().css(".target"),
+                Matcher::new()
+                    .css(".root")
+                    .gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")])
+                    .css(".middle")
+                    .gap_without(Matcher::new().any(vec![Matcher::new().css(".blocked"), Matcher::new().css(".hidden")]))
+                    .css(".target"),
+            ])
+            .on_each(|el| el.remove_and_keep_content()),
+        r#"<div class="root"><div class="red"><div class="blue"><section class="middle"><i class="target">keep</i><div class="blocked"><i class="target">skip</i></div></section></div></div></div>"#,
+        r#"<div class="root"><div class="red"><div class="blue"><section class="middle">keep<div class="blocked"><i class="target">skip</i></div></section></div></div></div>"#,
+    );
+
+    // on_text_chunk() — set_str()
+    check_html(
+        Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target").on_text_chunk(|chunk| {
+            if chunk.last_in_text_node() {
+                chunk.set_str("new".into());
+            } else {
+                chunk.remove();
+            }
+        }),
+        r#"<div class="root"><i class="target">old</i><section class="blocked"><i class="target">old</i></section></div>"#,
+        r#"<div class="root"><i class="target">new</i><section class="blocked"><i class="target">old</i></section></div>"#,
+    );
+
+    // on_comment() — set_text()
+    check_html(
+        Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target").on_comment(|comment| {
+            comment.set_text("ok").unwrap();
+        }),
+        r#"<div class="root"><i class="target"><!--a--></i><section class="blocked"><i class="target"><!--b--></i></section></div>"#,
+        r#"<div class="root"><i class="target"><!--ok--></i><section class="blocked"><i class="target"><!--b--></i></section></div>"#,
+    );
 }
