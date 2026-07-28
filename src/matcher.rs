@@ -41,11 +41,17 @@ enum Step {
     GapWithEvery(Vec<Matcher>),
     /// A gap containing an element matched by at least one nested matcher.
     GapWithAny(Vec<Matcher>),
+    /// A zero-length gap: the next selector must match a direct child.
+    Direct,
 }
 
 impl Step {
     fn is_gap(&self) -> bool {
-        matches!(self, Step::GapWithout(_) | Step::GapWithEvery(_) | Step::GapWithAny(_))
+        matches!(self, Step::GapWithout(_) | Step::GapWithEvery(_) | Step::GapWithAny(_) | Step::Direct)
+    }
+
+    fn is_element(&self) -> bool {
+        matches!(self, Step::Filter(_, _) | Step::Not(_) | Step::Every(_) | Step::Any(_))
     }
 }
 
@@ -112,7 +118,6 @@ impl Program {
                 has_gap = true;
                 continue;
             }
-
             if !has_gap {
                 patterns.push(Pattern::universal());
             }
@@ -140,12 +145,13 @@ impl Program {
             Step::Not(matcher) => Test::Not(self.add(matcher.steps)),
             Step::Every(matchers) => Test::Every(matchers.into_iter().map(|matcher| self.add(matcher.steps)).collect()),
             Step::Any(matchers) => Test::Any(matchers.into_iter().map(|matcher| self.add(matcher.steps)).collect()),
-            Step::GapWithout(_) | Step::GapWithEvery(_) | Step::GapWithAny(_) => unreachable!(),
+            Step::GapWithout(_) | Step::GapWithEvery(_) | Step::GapWithAny(_) | Step::Direct => unreachable!(),
         }
     }
 
     fn compile_gap(&mut self, step: Step, tests: &mut Vec<Test>) -> Pattern {
         match step {
+            Step::Direct => Pattern::epsilon(),
             Step::GapWithout(matcher) => {
                 let bit = self.add_nested_test(matcher, tests);
                 Pattern::not_bit(bit).repeat()
@@ -314,6 +320,13 @@ impl Matcher {
         self.gap(Step::GapWithAny(matchers.into_iter().map(nested).collect()))
     }
 
+    /// Requires the next selector to match a direct child, like the `>` CSS combinator.
+    pub fn direct(self) -> Self {
+        assert!(!self.steps.is_empty(), "direct() cannot be the first selector");
+        assert!(self.steps.last().is_some_and(Step::is_element), "direct() must follow an element selector");
+        self.gap(Step::Direct)
+    }
+
     /// Appends a link to the ancestry chain.
     fn step(mut self, step: Step) -> Self {
         assert!(
@@ -330,6 +343,7 @@ impl Matcher {
             self.callback.is_none() && self.text_callback.is_none() && self.aggregated_text_callback.is_none() && self.comment_callback.is_none(),
             "selectors must be added before callbacks"
         );
+        assert!(!matches!(self.steps.last(), Some(Step::Direct)), "direct() must be followed by an element selector");
         self.steps.push(gap);
         self
     }
@@ -378,7 +392,7 @@ impl Matcher {
             "build() requires on_each(), on_text_chunk(), on_text() or on_comment()"
         );
         assert!(!self.steps.is_empty(), "build() requires a selector to be added first");
-        assert!(!self.steps.last().unwrap().is_gap(), "a gap selector must be followed by an element selector");
+        assert!(!self.steps.last().unwrap().is_gap(), "a gap selector cannot be final in a chain");
         if self.aggregated_text_callback.is_none() && self.steps.len() == 1 && matches!(&self.steps[0], Step::Filter(_, _)) {
             return self.build_single();
         }

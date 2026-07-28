@@ -184,8 +184,8 @@ impl Pattern {
         Self(Expression::repeat(self.0))
     }
 
-    #[cfg(test)]
-    fn epsilon() -> Self {
+    /// Matches the empty word only.
+    pub(crate) fn epsilon() -> Self {
         Self(Expression::Epsilon)
     }
 

@@ -187,6 +187,41 @@ fn matcher() {
     // chain — an element is not its own ancestor
     check(Matcher::new().css("div").css("div"), r#"<div id="x"><div id="a"></div></div>"#, "a");
 
+    // direct() — equivalent of the ".a > .b" selector
+    check(
+        Matcher::new().css(".a").direct().css(".b"),
+        r#"<div class="a"><span class="b" id="a"></span><div><span class="b" id="x"></span></div></div><span class="b" id="y"></span>"#,
+        "a",
+    );
+
+    // direct() — unlike a descendant chain, intermediate elements break the match
+    check(
+        Matcher::new().css(".root").direct().css(".item"),
+        r#"<div class="root"><span class="item" id="a"></span></div><div class="root"><span><span class="item" id="x"></span></span></div>"#,
+        "a",
+    );
+
+    // direct() — three direct-child hops
+    check(
+        Matcher::new().css("ul").direct().css("li").direct().css("b"),
+        r#"<ul><li><b id="a"></b></li></ul><ul><li><span><b id="x"></b></span></li></ul><li><b id="y"></b></li>"#,
+        "a",
+    );
+
+    // direct() — works with filter() and not() selectors
+    check(
+        Matcher::new().filter("div", |el| el.get_attribute("data").as_deref() == Some("main")).direct().not(Matcher::new().css("span")),
+        r#"<div data="main"><i id="a"></i></div><div data="main"><span id="x"></span></div><div><i id="z"></i></div>"#,
+        "a",
+    );
+
+    // direct() — works with any() as the child selector
+    check(
+        Matcher::new().css(".root").direct().any(vec![Matcher::new().css("a"), Matcher::new().css("img")]),
+        r#"<div class="root"><a id="a"></a><section><img id="x"></section></div><a id="y"></a>"#,
+        "a",
+    );
+
     // chain — filter() as an ancestor
     check(
         Matcher::new().filter("div", |el| el.get_attribute("data").as_deref() == Some("main")).css("span"),
