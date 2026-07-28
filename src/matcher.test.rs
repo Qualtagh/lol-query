@@ -253,6 +253,9 @@ fn matcher() {
     // chain — a void element never becomes an ancestor
     check(Matcher::new().css("img").css("span"), r#"<img id="x"><span id="y"></span>"#, "");
 
+    // chain — void match must not leave text_open stuck
+    check_text(Matcher::new().css("div").css("img"), r#"<div><img></div><p>leak</p>"#, "");
+
     // chain — an implicitly closed ancestor stays open until its parent closes (known limitation)
     check(Matcher::new().css("p").css("p"), r#"<div><p id="x">one<p id="a">two</div>"#, "a");
 

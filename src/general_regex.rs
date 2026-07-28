@@ -189,8 +189,8 @@ impl Pattern {
         Self(Expression::Epsilon)
     }
 
-    #[cfg(test)]
-    fn any_symbol() -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn any_symbol() -> Self {
         Self(Expression::Atom(Atom::Any))
     }
 }
