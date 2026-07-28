@@ -218,6 +218,32 @@ fn nested(matcher: Matcher) -> Matcher {
 /// Builder for advanced element matching: CSS selectors, custom predicates, ancestry
 /// chains, constrained gaps and boolean combinators.
 ///
+/// ## Element-level selectors
+///
+/// - [`filter`](Self::filter) — selector plus custom predicate
+/// - [`css`](Self::css) — CSS selector
+/// - [`not`](Self::not) — negated nested matcher
+/// - [`every`](Self::every) — all nested matchers
+/// - [`any`](Self::any) — any nested matcher
+///
+/// ## Gap-level selectors
+///
+/// - [`gap_without`](Self::gap_without) — gap with no nested match
+/// - [`gap_with_every`](Self::gap_with_every) — gap with every nested matcher
+/// - [`gap_with_any`](Self::gap_with_any) — gap with any nested matcher
+/// - [`direct`](Self::direct) — direct child (`>` combinator)
+///
+/// ## Callbacks
+///
+/// - [`on_each`](Self::on_each) — per matched element
+/// - [`on_text_chunk`](Self::on_text_chunk) — per text chunk
+/// - [`on_text`](Self::on_text) — aggregated element text
+/// - [`on_comment`](Self::on_comment) — per HTML comment
+///
+/// ## Other methods
+///
+/// - [`build`](Self::build) — get handler entries for HtmlRewriter
+///
 /// # Example: ancestry and combinators
 ///
 /// ```rust
@@ -234,7 +260,10 @@ fn nested(matcher: Matcher) -> Matcher {
 /// let handlers = Matcher::new()
 ///     .css(".root")
 ///     .every(vec![
-///         Matcher::new().any(vec![Matcher::new().css("a"), Matcher::new().css("img")]),
+///         Matcher::new().any(vec![
+///             Matcher::new().css("a"),
+///             Matcher::new().css("img"),
+///         ]),
 ///         Matcher::new().not(Matcher::new().css(".hidden")),
 ///     ])
 ///     .on_each(move |el| {
