@@ -223,13 +223,6 @@ fn matcher() {
         "a",
     );
 
-    // direct() — works with filter() and not() selectors
-    check(
-        Matcher::new().filter("div", |el| el.get_attribute("data").as_deref() == Some("main")).direct().not(Matcher::new().css("span")),
-        r#"<div data="main"><i id="a"></i></div><div data="main"><span id="x"></span></div><div><i id="z"></i></div>"#,
-        "a",
-    );
-
     // direct() — works with any() as the child selector
     check(
         Matcher::new().css(".root").direct().any(vec![Matcher::new().css("a"), Matcher::new().css("img")]),
@@ -480,6 +473,109 @@ fn matcher() {
 
     // on_comment() — comment inside a comment
     check_comment(Matcher::new().css("a"), r#"<a><!--outer <!--inner--></a><span><!--skip--></span>"#, "outer <!--inner");
+}
+
+#[test]
+fn matcher_comparisons() {
+    // not() — matched ancestor must satisfy not(); gap_without() — gap ancestry must satisfy not()
+    let blocked_html = r#"<div class="root"><i id="a"></i><section><i id="b"></i></section><section class="blocked"><i id="x"></i></section></div>"#;
+    check(Matcher::new().css(".root").not(Matcher::new().css(".blocked")).css("i"), blocked_html, "b");
+    check(Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css("i"), blocked_html, "a b");
+
+    // every() — all matchers on the same element; gap_with_every() — matchers on distinct gap elements
+    let red_blue_html = r#"<div class="root"><div class="red blue"><i id="nested-both"></i></div><section class="red"><b class="blue"><i id="via-gap"></i></b></section></div>"#;
+    check(Matcher::new().css(".root").every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")]).css("i"), red_blue_html, "nested-both");
+    check(
+        Matcher::new().css(".root").gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")]).css("i"),
+        red_blue_html,
+        "nested-both via-gap",
+    );
+
+    // direct() — same matches as the ".a > .b" CSS combinator
+    let direct_html = r#"<div class="a"><span class="b" id="a"></span></div><span class="b" id="y"></span>"#;
+    check(Matcher::new().css(".a > .b"), direct_html, "a");
+    check(Matcher::new().css(".a").direct().css(".b"), direct_html, "a");
+
+    // direct() + filter() — CSS ".a > .b" cannot apply an arbitrary predicate on the parent
+    let filter_direct_html = r#"<div data="main"><i id="a"></i></div><div data="main"><span id="x"></span></div><div><i id="z"></i></div>"#;
+    check(
+        Matcher::new().filter("div", |el| el.get_attribute("data").as_deref() == Some("main")).direct().not(Matcher::new().css("span")),
+        filter_direct_html,
+        "a",
+    );
+    check(Matcher::new().css("div > i"), filter_direct_html, "a z");
+}
+
+#[test]
+#[should_panic(expected = "a gap selector cannot be final in a chain")]
+fn matcher_gap_cannot_be_final() {
+    Matcher::new().css("div").gap_without(Matcher::new().css("span")).on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "direct() cannot be the first selector")]
+fn matcher_direct_cannot_be_first() {
+    Matcher::new().direct().css("div").on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "direct() must follow an element selector")]
+fn matcher_direct_must_follow_element() {
+    Matcher::new().css("a").gap_without(Matcher::new().css("b")).direct().css("i").on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "direct() must be followed by an element selector")]
+fn matcher_direct_must_precede_element() {
+    Matcher::new().css("a").direct().gap_without(Matcher::new().css("b")).css("i").on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "a nested matcher needs at least one selector")]
+fn matcher_nested_empty() {
+    Matcher::new().not(Matcher::new()).on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "a nested matcher cannot end with a gap selector")]
+fn matcher_nested_ends_with_gap() {
+    Matcher::new().not(Matcher::new().css("a").direct()).on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "a nested matcher must not have an on_each() callback")]
+fn matcher_nested_with_callback() {
+    Matcher::new().not(Matcher::new().css("a").on_each(|_| {})).on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "selectors must be added before callbacks")]
+fn matcher_selectors_before_callbacks() {
+    Matcher::new().css("div").on_each(|_| {}).css("span").build();
+}
+
+#[test]
+#[should_panic(expected = "build() requires on_each(), on_text_chunk(), on_text() or on_comment()")]
+fn matcher_build_requires_callback() {
+    Matcher::new().css("div").build();
+}
+
+#[test]
+#[should_panic(expected = "every() requires at least one matcher")]
+fn matcher_every_requires_matchers() {
+    Matcher::new().every(vec![]).on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "gap_with_every() requires at least one matcher")]
+fn matcher_gap_with_every_requires_matchers() {
+    Matcher::new().gap_with_every(vec![]).css("i").on_each(|_| {}).build();
+}
+
+#[test]
+#[should_panic(expected = "gap_with_any() requires at least one matcher")]
+fn matcher_gap_with_any_requires_matchers() {
+    Matcher::new().gap_with_any(vec![]).css("i").on_each(|_| {}).build();
 }
 
 #[test]
