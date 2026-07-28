@@ -6,23 +6,27 @@ use lol_html::{HtmlRewriter, Settings};
 use super::Matcher;
 use crate::SettingsExt;
 
-#[derive(Clone, Copy)]
-struct Capture {
-    each: bool,
-    text: bool,
-    aggregated_text: bool,
-    comment: bool,
-}
-
-impl Capture {
-    const AGGREGATED_TEXT: Self = Self { each: false, text: false, aggregated_text: true, comment: false };
-    const ALL: Self = Self { each: true, text: true, aggregated_text: true, comment: true };
-    const COMMENT: Self = Self { each: false, text: false, aggregated_text: false, comment: true };
-    const EACH: Self = Self { each: true, text: false, aggregated_text: false, comment: false };
-    const TEXT: Self = Self { each: false, text: true, aggregated_text: false, comment: false };
-}
-
 type Log = Rc<RefCell<Vec<String>>>;
+
+#[derive(Clone, Default)]
+struct Logs {
+    each: Option<Log>,
+    text_chunk: Option<Log>,
+    text: Option<Log>,
+    comment: Option<Log>,
+}
+
+#[derive(Default)]
+struct Expected<'a> {
+    each: Option<&'a str>,
+    text_chunk: Option<&'a str>,
+    text: Option<&'a str>,
+    comment: Option<&'a str>,
+}
+
+fn log() -> Log {
+    Rc::new(RefCell::new(vec![]))
+}
 
 fn exec(handlers: Vec<crate::HandlerEntry<'static, 'static>>, html: &str) {
     let mut out = vec![];
@@ -31,14 +35,12 @@ fn exec(handlers: Vec<crate::HandlerEntry<'static, 'static>>, html: &str) {
     rw.end().unwrap();
 }
 
-fn attach(matcher: Matcher, log: Log, capture: Capture) -> Vec<crate::HandlerEntry<'static, 'static>> {
+fn attach(matcher: Matcher, logs: &Logs) -> Vec<crate::HandlerEntry<'static, 'static>> {
     let mut matcher = matcher;
-    if capture.each {
-        let log = log.clone();
+    if let Some(log) = logs.each.clone() {
         matcher = matcher.on_each(move |el| log.borrow_mut().push(el.get_attribute("id").unwrap_or_default()));
     }
-    if capture.text {
-        let log = log.clone();
+    if let Some(log) = logs.text_chunk.clone() {
         matcher = matcher.on_text_chunk(move |chunk| {
             let s = chunk.as_str();
             if s.is_empty() {
@@ -47,17 +49,15 @@ fn attach(matcher: Matcher, log: Log, capture: Capture) -> Vec<crate::HandlerEnt
             log.borrow_mut().push(s.to_string());
         });
     }
-    if capture.aggregated_text {
-        let log = log.clone();
-        matcher = matcher.on_text(move |text| {
-            if text.is_empty() {
+    if let Some(log) = logs.text.clone() {
+        matcher = matcher.on_text(move |aggregated| {
+            if aggregated.is_empty() {
                 return;
             }
-            log.borrow_mut().push(text.to_string());
+            log.borrow_mut().push(aggregated.to_string());
         });
     }
-    if capture.comment {
-        let log = log.clone();
+    if let Some(log) = logs.comment.clone() {
         matcher = matcher.on_comment(move |comment| {
             let s = comment.text();
             if s.is_empty() {
@@ -69,31 +69,46 @@ fn attach(matcher: Matcher, log: Log, capture: Capture) -> Vec<crate::HandlerEnt
     matcher.build()
 }
 
-fn run(matchers: Vec<Matcher>, html: &str, capture: Capture, expected: &str) {
-    let log: Log = Rc::new(RefCell::new(vec![]));
-    let handlers = matchers.into_iter().flat_map(|matcher| attach(matcher, log.clone(), capture)).collect();
-    exec(handlers, html);
-    assert_eq!(log.borrow().join(" "), expected);
+fn check_logs(matchers: Vec<Matcher>, html: &str, expected: Expected<'_>) {
+    let logs = Logs {
+        each: expected.each.map(|_| log()),
+        text_chunk: expected.text_chunk.map(|_| log()),
+        text: expected.text.map(|_| log()),
+        comment: expected.comment.map(|_| log()),
+    };
+    exec(matchers.into_iter().flat_map(|matcher| attach(matcher, &logs)).collect(), html);
+    for (log, expected) in
+        [(&logs.each, expected.each), (&logs.comment, expected.comment), (&logs.text, expected.text), (&logs.text_chunk, expected.text_chunk)]
+    {
+        if let (Some(log), Some(expected)) = (log, expected) {
+            assert_eq!(log.borrow().join(" "), expected);
+        }
+    }
 }
 
 fn check(matcher: Matcher, html: &str, expected: &str) {
-    run(vec![matcher], html, Capture::EACH, expected);
+    check_logs(vec![matcher], html, Expected { each: Some(expected), ..Default::default() });
 }
 
 fn check_text(matcher: Matcher, html: &str, expected: &str) {
-    run(vec![matcher], html, Capture::TEXT, expected);
+    check_logs(vec![matcher], html, Expected { text_chunk: Some(expected), ..Default::default() });
 }
 
 fn check_aggregated(matcher: Matcher, html: &str, expected: &str) {
-    run(vec![matcher], html, Capture::AGGREGATED_TEXT, expected);
+    check_logs(vec![matcher], html, Expected { text: Some(expected), ..Default::default() });
 }
 
 fn check_comment(matcher: Matcher, html: &str, expected: &str) {
-    run(vec![matcher], html, Capture::COMMENT, expected);
+    check_logs(vec![matcher], html, Expected { comment: Some(expected), ..Default::default() });
 }
 
-fn check_all(matcher: Matcher, html: &str, expected: &str) {
-    run(vec![matcher], html, Capture::ALL, expected);
+fn check_all(matcher: Matcher, html: &str, expected_each: &str, expected_comment: &str, expected_text: &str, expected_text_chunk: &str) {
+    check_logs(vec![matcher], html, Expected {
+        each: Some(expected_each),
+        comment: Some(expected_comment),
+        text: Some(expected_text),
+        text_chunk: Some(expected_text_chunk),
+    });
 }
 
 fn nested_html(depth: usize) -> String {
@@ -356,15 +371,17 @@ fn matcher() {
     check_all(
         Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target"),
         r#"<div class="root"><section><i class="target" id="a">keep<!--note--></i></section><section class="blocked"><i class="target" id="x">skip<!--miss--></i></section></div>"#,
-        "a keep note keep",
+        "a",
+        "note",
+        "keep",
+        "keep",
     );
 
     // several matchers keep their own ancestry when added to the same rewriter
-    run(
+    check_logs(
         vec![Matcher::new().css("div").css("i"), Matcher::new().css("section").css("i")],
         r#"<div><i id="a"></i></div><section><i id="b"></i></section><i id="x"></i>"#,
-        Capture::EACH,
-        "a b",
+        Expected { each: Some("a b"), ..Default::default() },
     );
 
     // build paths — css/filter/chain x on_each/on_text_chunk/on_comment/on_text/all
@@ -372,7 +389,14 @@ fn matcher() {
     check_text(Matcher::new().css("p"), r#"<p>hi<b>there</b></p><div>x</div>"#, "hi there");
     check_aggregated(Matcher::new().css("p"), r#"<p>hi<b>there</b></p><div>x</div>"#, "hithere");
     check_comment(Matcher::new().css("p"), r#"<p><!--note--></p><div><!--skip--></div>"#, "note");
-    check_all(Matcher::new().css("p"), r#"<p id="a">one<!--c1--></p><div id="x">skip<!--miss--></div><p id="b">two<!--c2--></p>"#, "a one c1 one b two c2 two");
+    check_all(
+        Matcher::new().css("p"),
+        r#"<p id="a">one<!--c1--></p><div id="x">skip<!--miss--></div><p id="b">two<!--c2--></p>"#,
+        "a b",
+        "c1 c2",
+        "one two",
+        "one two",
+    );
 
     check(
         Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
@@ -397,7 +421,10 @@ fn matcher() {
     check_all(
         Matcher::new().filter("span", |el| el.get_attribute("data-x").as_deref() == Some("main")),
         r#"<span data-x="main" id="a"><!--c1-->yes</span><span id="b">no<!--c2--></span>"#,
-        "a c1 yes yes",
+        "a",
+        "c1",
+        "yes",
+        "yes",
     );
 
     check(Matcher::new().css(".root").css("span"), r#"<div class="root"><span id="a"></span></div><span id="b"></span>"#, "a");
@@ -415,7 +442,10 @@ fn matcher() {
     check_all(
         Matcher::new().css(".root").css("span"),
         r#"<div class="root">outer<span id="a">inner<!--c1--></span><!--div comment--></div><span id="b">other<!--c2--></span>"#,
-        "a inner c1 inner",
+        "a",
+        "c1",
+        "inner",
+        "inner",
     );
 
     // on_text_chunk() — text in nested elements is included
@@ -434,7 +464,7 @@ fn matcher() {
     check_aggregated(Matcher::new().css("div"), r#"<div>outer<div>inner</div></div>"#, "inner outerinner");
 
     // on_text_chunk() vs on_text() — chunks are per text node, on_text is per element
-    check_all(Matcher::new().css("p"), r#"<p id="a">one<b>two</b></p>"#, "a one two onetwo");
+    check_all(Matcher::new().css("p"), r#"<p id="a">one<b>two</b></p>"#, "a", "", "onetwo", "one two");
 
     // on_text() — text outside the excluded selector
     check_aggregated(Matcher::new().not(Matcher::new().css("a")), r#"<a>skip</a><span>keep</span>"#, "keep");
