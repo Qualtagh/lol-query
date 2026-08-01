@@ -39,7 +39,7 @@ fn check_enter_exit(steps: Vec<Step>, html: &str, expected: &str) {
     let exit_log = events.clone();
     let mut engine = Engine::new();
     let chain = engine.add_chain(steps);
-    engine.on_enter(chain, move |id: InstanceId, el| {
+    engine.on_enter(chain, move |id: InstanceId, _depth, el| {
         enter_log.borrow_mut().push(format!("+{id}:{}", el.get_attribute("id").unwrap_or_default()));
     });
     engine.on_exit(chain, move |id: InstanceId| {

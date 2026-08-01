@@ -188,8 +188,8 @@ impl Program {
     }
 }
 
-pub(crate) trait EnterCallback: for<'r, 't> FnMut(InstanceId, &mut El<'r, 't>) + 'static {}
-impl<F: for<'r, 't> FnMut(InstanceId, &mut El<'r, 't>) + 'static> EnterCallback for F {}
+pub(crate) trait EnterCallback: for<'r, 't> FnMut(InstanceId, u32, &mut El<'r, 't>) + 'static {}
+impl<F: for<'r, 't> FnMut(InstanceId, u32, &mut El<'r, 't>) + 'static> EnterCallback for F {}
 
 pub(crate) trait ExitCallback: FnMut(InstanceId) + 'static {}
 impl<F: FnMut(InstanceId) + 'static> ExitCallback for F {}
@@ -222,12 +222,12 @@ impl ChainBindings {
     }
 }
 
-/// Per-depth bookkeeping for sibling axes and subscriptions (filled by the plan runtime later).
+/// Per-depth bookkeeping for sibling axes and subscriptions.
 #[derive(Default)]
 struct DepthSlot {
-    /// Closed-child summaries for `prev` / `+` / `~` (plan runtime).
+    /// Closed-child summaries for `prev` / `+` / `~`.
     _sibling_summary: (),
-    /// Pending `next` / `nextAll` subscriptions armed at this depth (plan runtime).
+    /// Pending `next` / `nextAll` subscriptions armed at this depth.
     _subscriptions: (),
 }
 
@@ -421,7 +421,7 @@ impl Engine {
                     callback(el);
                 }
                 if let Some(callback) = on_enter[chain_id].as_mut() {
-                    callback(instance, el);
+                    callback(instance, child_depth, el);
                 }
                 let Some(end_tag_handlers) = el.end_tag_handlers() else {
                     if let Some(callback) = &on_exit[chain_id] {
@@ -448,27 +448,33 @@ impl Engine {
                 end_tag_handlers.push(Box::new(move |_: &mut EndTag<'_>| {
                     let state = &mut *shared.borrow_mut();
                     let ended = state.chains[chain_id].open_instances.pop().unwrap();
-                    if let Some(callback) = &on_exit {
-                        callback.borrow_mut()(ended);
-                    }
-                    if track_text {
-                        if has_aggregated_text {
-                            let start = state.chains[chain_id].text_starts.pop().unwrap();
-                            let len = state.text_chunks[start..].iter().map(String::len).sum();
-                            let mut text = String::with_capacity(len);
-                            for chunk in &state.text_chunks[start..] {
-                                text.push_str(chunk);
-                            }
-                            let still_needed = state.chains.iter().any(|chain| !chain.text_starts.is_empty());
-                            if !still_needed {
-                                state.text_chunks.clear();
-                            }
-                            on_text.as_ref().unwrap().borrow_mut()(&text);
+                    // Aggregated text is ready before exit so End-scheduled plan nodes can read it.
+                    let text = if track_text && has_aggregated_text {
+                        let start = state.chains[chain_id].text_starts.pop().unwrap();
+                        let len = state.text_chunks[start..].iter().map(String::len).sum();
+                        let mut text = String::with_capacity(len);
+                        for chunk in &state.text_chunks[start..] {
+                            text.push_str(chunk);
                         }
+                        let still_needed = state.chains.iter().any(|chain| !chain.text_starts.is_empty());
+                        if !still_needed {
+                            state.text_chunks.clear();
+                        }
+                        Some(text)
+                    } else {
+                        None
+                    };
+                    if track_text {
                         state.chains[chain_id].text_open -= 1;
                     }
                     if has_comment {
                         state.chains[chain_id].comment_open -= 1;
+                    }
+                    if let Some(text) = &text {
+                        on_text.as_ref().unwrap().borrow_mut()(text);
+                    }
+                    if let Some(callback) = &on_exit {
+                        callback.borrow_mut()(ended);
                     }
                     Ok(())
                 }));
@@ -494,8 +500,7 @@ impl Engine {
                         callback(chunk);
                     }
                     if has_aggregated_any {
-                        let store =
-                            open.iter().enumerate().any(|(chain_id, &is_open)| is_open && aggregated_flags_for_text[chain_id]);
+                        let store = open.iter().enumerate().any(|(chain_id, &is_open)| is_open && aggregated_flags_for_text[chain_id]);
                         if store {
                             shared.borrow_mut().text_chunks.push(chunk.as_str().to_owned());
                         }
