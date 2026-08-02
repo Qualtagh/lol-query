@@ -385,99 +385,112 @@ impl Engine {
         let shared_for_combine = shared.clone();
         let aggregated_flags_for_text = aggregated_flags.clone();
         let combine = element!("*", move |el: &mut El<'_, '_>| -> HandlerResult {
-            let state = &mut *shared_for_combine.borrow_mut();
-            let parent_states = state.regexp_states.clone();
-            let mut child_states = Vec::with_capacity(chains.len());
-            state.matched.fill(false);
-            for (index, chain) in chains.iter_mut().enumerate() {
-                let symbol = chain.symbol(state);
-                let next = chain.regexp.transition(parent_states[index], &symbol);
-                state.matched[index] = chain.regexp.is_match(next);
-                child_states.push(next);
-            }
-            // This handler is the last one to run for the element, so hits can be recycled here.
-            state.hits.fill(false);
-            let parent_depth = state.depth;
-            let child_depth = parent_depth + 1;
-            if let Some(end_tag_handlers) = el.end_tag_handlers() {
-                state.regexp_states = child_states;
-                state.depth = child_depth;
-                state.ensure_depth_slot(child_depth);
-                let shared = shared_for_combine.clone();
-                end_tag_handlers.push(Box::new(move |_: &mut EndTag<'_>| {
-                    let state = &mut *shared.borrow_mut();
-                    state.regexp_states = parent_states;
-                    state.depth = parent_depth;
-                    Ok(())
-                }));
-            }
-            for chain_id in 0..lifecycle.len() {
-                if !state.matched[chain_id] || !lifecycle[chain_id] {
-                    continue;
+            let mut pending: Vec<(usize, InstanceId, u32, bool)> = Vec::new();
+            {
+                let state = &mut *shared_for_combine.borrow_mut();
+                let parent_states = state.regexp_states.clone();
+                let mut child_states = Vec::with_capacity(chains.len());
+                state.matched.fill(false);
+                for (index, chain) in chains.iter_mut().enumerate() {
+                    let symbol = chain.symbol(state);
+                    let next = chain.regexp.transition(parent_states[index], &symbol);
+                    state.matched[index] = chain.regexp.is_match(next);
+                    child_states.push(next);
                 }
-                let instance = state.next_instance_id;
-                state.next_instance_id += 1;
+                // This handler is the last one to run for the element, so hits can be recycled here.
+                state.hits.fill(false);
+                let parent_depth = state.depth;
+                let child_depth = parent_depth + 1;
+                if let Some(end_tag_handlers) = el.end_tag_handlers() {
+                    state.regexp_states = child_states;
+                    state.depth = child_depth;
+                    state.ensure_depth_slot(child_depth);
+                    let shared = shared_for_combine.clone();
+                    end_tag_handlers.push(Box::new(move |_: &mut EndTag<'_>| {
+                        let state = &mut *shared.borrow_mut();
+                        state.regexp_states = parent_states;
+                        state.depth = parent_depth;
+                        Ok(())
+                    }));
+                }
+                for chain_id in 0..lifecycle.len() {
+                    if !state.matched[chain_id] || !lifecycle[chain_id] {
+                        continue;
+                    }
+                    let instance = state.next_instance_id;
+                    state.next_instance_id += 1;
+                    let Some(end_tag_handlers) = el.end_tag_handlers() else {
+                        pending.push((chain_id, instance, child_depth, true));
+                        continue;
+                    };
+                    state.chains[chain_id].open_instances.push(instance);
+                    let track_text = track_text_flags[chain_id];
+                    let has_aggregated_text = aggregated_flags[chain_id];
+                    let has_comment = comment_flags[chain_id];
+                    if track_text {
+                        state.chains[chain_id].text_open += 1;
+                        if has_aggregated_text {
+                            state.chains[chain_id].text_starts.push(state.text_chunks.len());
+                        }
+                    }
+                    if has_comment {
+                        state.chains[chain_id].comment_open += 1;
+                    }
+                    let shared = shared_for_combine.clone();
+                    let on_text = on_text[chain_id].clone();
+                    let on_exit = on_exit[chain_id].clone();
+                    end_tag_handlers.push(Box::new(move |_: &mut EndTag<'_>| {
+                        let (ended, text) = {
+                            let state = &mut *shared.borrow_mut();
+                            let ended = state.chains[chain_id].open_instances.pop().unwrap();
+                            // Aggregated text is ready before exit so End-scheduled plan nodes can read it.
+                            let text = if track_text && has_aggregated_text {
+                                let start = state.chains[chain_id].text_starts.pop().unwrap();
+                                let len = state.text_chunks[start..].iter().map(String::len).sum();
+                                let mut text = String::with_capacity(len);
+                                for chunk in &state.text_chunks[start..] {
+                                    text.push_str(chunk);
+                                }
+                                let still_needed = state.chains.iter().any(|chain| !chain.text_starts.is_empty());
+                                if !still_needed {
+                                    state.text_chunks.clear();
+                                }
+                                Some(text)
+                            } else {
+                                None
+                            };
+                            if track_text {
+                                state.chains[chain_id].text_open -= 1;
+                            }
+                            if has_comment {
+                                state.chains[chain_id].comment_open -= 1;
+                            }
+                            (ended, text)
+                        };
+                        if let Some(text) = &text {
+                            on_text.as_ref().unwrap().borrow_mut()(text);
+                        }
+                        if let Some(callback) = &on_exit {
+                            callback.borrow_mut()(ended);
+                        }
+                        Ok(())
+                    }));
+                    pending.push((chain_id, instance, child_depth, false));
+                }
+            }
+            for (chain_id, instance, depth, exit_now) in pending {
                 if let Some(callback) = on_match[chain_id].as_mut() {
                     callback(el);
                 }
                 if let Some(callback) = on_enter[chain_id].as_mut() {
-                    callback(instance, child_depth, el);
+                    callback(instance, depth, el);
                 }
-                let Some(end_tag_handlers) = el.end_tag_handlers() else {
-                    if let Some(callback) = &on_exit[chain_id] {
-                        callback.borrow_mut()(instance);
-                    }
+                if !exit_now {
                     continue;
-                };
-                state.chains[chain_id].open_instances.push(instance);
-                let track_text = track_text_flags[chain_id];
-                let has_aggregated_text = aggregated_flags[chain_id];
-                let has_comment = comment_flags[chain_id];
-                if track_text {
-                    state.chains[chain_id].text_open += 1;
-                    if has_aggregated_text {
-                        state.chains[chain_id].text_starts.push(state.text_chunks.len());
-                    }
                 }
-                if has_comment {
-                    state.chains[chain_id].comment_open += 1;
+                if let Some(callback) = &on_exit[chain_id] {
+                    callback.borrow_mut()(instance);
                 }
-                let shared = shared_for_combine.clone();
-                let on_text = on_text[chain_id].clone();
-                let on_exit = on_exit[chain_id].clone();
-                end_tag_handlers.push(Box::new(move |_: &mut EndTag<'_>| {
-                    let state = &mut *shared.borrow_mut();
-                    let ended = state.chains[chain_id].open_instances.pop().unwrap();
-                    // Aggregated text is ready before exit so End-scheduled plan nodes can read it.
-                    let text = if track_text && has_aggregated_text {
-                        let start = state.chains[chain_id].text_starts.pop().unwrap();
-                        let len = state.text_chunks[start..].iter().map(String::len).sum();
-                        let mut text = String::with_capacity(len);
-                        for chunk in &state.text_chunks[start..] {
-                            text.push_str(chunk);
-                        }
-                        let still_needed = state.chains.iter().any(|chain| !chain.text_starts.is_empty());
-                        if !still_needed {
-                            state.text_chunks.clear();
-                        }
-                        Some(text)
-                    } else {
-                        None
-                    };
-                    if track_text {
-                        state.chains[chain_id].text_open -= 1;
-                    }
-                    if has_comment {
-                        state.chains[chain_id].comment_open -= 1;
-                    }
-                    if let Some(text) = &text {
-                        on_text.as_ref().unwrap().borrow_mut()(text);
-                    }
-                    if let Some(callback) = &on_exit {
-                        callback.borrow_mut()(ended);
-                    }
-                    Ok(())
-                }));
             }
             Ok(())
         });
