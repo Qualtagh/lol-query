@@ -24,7 +24,11 @@ impl<F: FnMut(&str) + 'static> AggregatedTextCallback for F {}
 pub(crate) trait CommentCallback: FnMut(&mut Comment<'_>) + 'static {}
 impl<F: FnMut(&mut Comment<'_>) + 'static> CommentCallback for F {}
 
-/// Identity of one open match of a chain (scope instance for the plan runtime).
+/// One open match of one Engine chain.
+///
+/// Two chains matching the same `<a>` get two instances.
+/// Frames, exit hooks, and text aggregation key off this (“this activation ended”).
+/// Not a [`NodeId`](crate::plan::representation::id::NodeId) (that is the DOM node ID).
 pub(crate) type InstanceId = u64;
 
 /// Index of a compiled ancestry chain in an [`Engine`].

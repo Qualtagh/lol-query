@@ -1,4 +1,4 @@
-#![allow(dead_code)] // staged for the physical planner rewrite
+#![allow(dead_code)]
 
 pub(crate) mod down;
 pub(crate) mod frames;
