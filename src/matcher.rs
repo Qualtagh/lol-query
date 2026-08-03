@@ -4,6 +4,7 @@ use std::rc::Rc;
 use lol_html::html_content::{Comment, Element, EndTag, TextChunk};
 use lol_html::{HandlerResult, LocalHandlerTypes, comments, element, text};
 
+use crate::ElementView;
 use crate::HandlerEntry;
 use crate::engine::{AggregatedTextCallback, Callback, CommentCallback, Engine, Predicate, Step, TextCallback};
 
@@ -271,7 +272,7 @@ impl Matcher {
         if text_callback.is_none() && comment_callback.is_none() {
             let mut callback = callback.expect("build() requires on_each(), on_text_chunk() or on_comment()");
             return vec![element!(selector.as_str(), move |el: &mut El<'_, '_>| -> HandlerResult {
-                if !predicate(el) {
+                if !predicate(&ElementView::new(el)) {
                     return Ok(());
                 }
                 callback(el);
@@ -285,7 +286,7 @@ impl Matcher {
         let mut callback = callback;
         handlers.push(
             element!(selector.as_str(), move |el: &mut El<'_, '_>| -> HandlerResult {
-                let ok = predicate(el);
+                let ok = predicate(&ElementView::new(el));
                 *active_for_el.borrow_mut() = ok;
                 if !ok {
                     return Ok(());

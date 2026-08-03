@@ -4,13 +4,14 @@ use std::rc::Rc;
 use lol_html::html_content::{Comment, Element, EndTag, TextChunk};
 use lol_html::{HandlerResult, LocalHandlerTypes, comments, element, text};
 
+use crate::ElementView;
 use crate::HandlerEntry;
 use crate::general_regex::{GenRegExp, Pattern};
 
 type El<'r, 't> = Element<'r, 't, LocalHandlerTypes>;
 
-pub(crate) trait Predicate: for<'r, 't> Fn(&mut El<'r, 't>) -> bool + 'static {}
-impl<F: for<'r, 't> Fn(&mut El<'r, 't>) -> bool + 'static> Predicate for F {}
+pub(crate) trait Predicate: for<'a> Fn(&ElementView<'a>) -> bool + 'static {}
+impl<F: for<'a> Fn(&ElementView<'a>) -> bool + 'static> Predicate for F {}
 
 pub(crate) trait Callback: for<'r, 't> FnMut(&mut El<'r, 't>) + 'static {}
 impl<F: for<'r, 't> FnMut(&mut El<'r, 't>) + 'static> Callback for F {}
@@ -377,7 +378,7 @@ impl Engine {
             .map(|(leaf, (selector, predicate))| {
                 let shared = shared.clone();
                 element!(selector.as_str(), move |el: &mut El<'_, '_>| -> HandlerResult {
-                    if let Some(predicate) = &predicate && !predicate(el) {
+                    if let Some(predicate) = &predicate && !predicate(&ElementView::new(el)) {
                         return Ok(());
                     }
                     shared.borrow_mut().hits[leaf] = true;
