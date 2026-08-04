@@ -2,8 +2,7 @@
 //!
 //! - [`physical`] — kernels for the streaming rewrite: downward birth
 //!   gating (`down_ok`), scope-tree ancestry, and activation frames.
-//! - [`representation`] — logical identity types (`NodeId`, `OccurrenceId`,
-//!   `OrderKey`). Path AST and relational IR arrive in later strata.
+//! - [`representation`] — identity keys and path AST. Relational IR arrives next.
 //! - [`offline`] — full-DOM facade over `scraper` (plan root, element axes,
 //!   attr/text, CSS match). Path and relational evaluation come next.
 //!
