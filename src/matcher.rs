@@ -7,18 +7,17 @@ use lol_html::{HandlerResult, LocalHandlerTypes, comments, element, text};
 use crate::ElementView;
 use crate::HandlerEntry;
 use crate::engine::{AggregatedTextCallback, Callback, CommentCallback, Engine, Predicate, Step, TextCallback};
+use crate::match_pattern::MatchPattern;
 
 type El<'r, 't> = Element<'r, 't, LocalHandlerTypes>;
 
-/// Validates a matcher nested inside a selector or gap constraint and returns its steps.
-fn nested(matcher: Matcher) -> Vec<Step> {
-    assert!(!matcher.steps.is_empty(), "a nested matcher needs at least one selector");
-    assert!(!matcher.steps.last().unwrap().is_gap(), "a nested matcher cannot end with a gap selector");
+/// Takes a nested [`Matcher`], rejects callbacks, and returns its validated pattern.
+fn nested(matcher: Matcher) -> MatchPattern {
     assert!(matcher.callback.is_none(), "a nested matcher must not have an on_each() callback");
     assert!(matcher.text_callback.is_none(), "a nested matcher must not have an on_text_chunk() callback");
     assert!(matcher.aggregated_text_callback.is_none(), "a nested matcher must not have an on_text() callback");
     assert!(matcher.comment_callback.is_none(), "a nested matcher must not have an on_comment() callback");
-    matcher.steps
+    matcher.pattern
 }
 
 /// Builder for advanced element matching: CSS selectors, custom predicates, ancestry
@@ -88,7 +87,7 @@ fn nested(matcher: Matcher) -> Vec<Step> {
 /// assert_eq!(*ids.borrow(), ["a", "b"]);
 /// ```
 pub struct Matcher {
-    steps: Vec<Step>,
+    pattern: MatchPattern,
     callback: Option<Box<dyn Callback>>,
     text_callback: Option<Box<dyn TextCallback>>,
     aggregated_text_callback: Option<Box<dyn AggregatedTextCallback>>,
@@ -105,88 +104,70 @@ impl Default for Matcher {
 impl Matcher {
     /// Creates a new [`Matcher`] builder.
     pub fn new() -> Self {
-        Matcher { steps: vec![], callback: None, text_callback: None, aggregated_text_callback: None, comment_callback: None }
+        Matcher { pattern: MatchPattern::new(), callback: None, text_callback: None, aggregated_text_callback: None, comment_callback: None }
     }
 
     /// Selects elements matching `selector` that also satisfy `predicate`.
     pub fn filter(self, selector: impl Into<String>, predicate: impl Predicate) -> Self {
-        self.step(Step::Filter(selector.into(), Some(Box::new(predicate))))
+        self.map_pattern(|pattern| pattern.filter(selector, predicate))
     }
 
     /// Selects all elements matching `selector`.
     pub fn css(self, selector: impl Into<String>) -> Self {
-        self.step(Step::Filter(selector.into(), None))
+        self.map_pattern(|pattern| pattern.css(selector))
     }
 
     /// Selects elements that `matcher` does not match, like the `:not()` pseudo-class.
     pub fn not(self, matcher: Matcher) -> Self {
-        self.step(Step::Not(nested(matcher)))
+        self.map_pattern(|pattern| pattern.not(nested(matcher)))
     }
 
     /// Selects elements that all of the `matchers` match.
     pub fn every(self, matchers: Vec<Matcher>) -> Self {
-        assert!(!matchers.is_empty(), "every() requires at least one matcher");
-        self.step(Step::Every(matchers.into_iter().map(nested).collect()))
+        self.map_pattern(|pattern| pattern.every(matchers.into_iter().map(nested).collect()))
     }
 
     /// Selects elements that at least one of the `matchers` matches.
     pub fn any(self, matchers: Vec<Matcher>) -> Self {
-        assert!(!matchers.is_empty(), "any() requires at least one matcher");
-        self.step(Step::Any(matchers.into_iter().map(nested).collect()))
+        self.map_pattern(|pattern| pattern.any(matchers.into_iter().map(nested).collect()))
     }
 
     /// Constrains the gap before the next selector to contain no element
     /// matched by `matcher`. The gap may be empty.
     pub fn gap_without(self, matcher: Matcher) -> Self {
-        self.gap(Step::GapWithout(nested(matcher)))
+        self.map_pattern(|pattern| pattern.gap_without(nested(matcher)))
     }
 
     /// Constrains the gap before the next selector to contain at least one
     /// match for every nested matcher, in any order.
     pub fn gap_with_every(self, matchers: Vec<Matcher>) -> Self {
-        assert!(!matchers.is_empty(), "gap_with_every() requires at least one matcher");
-        self.gap(Step::GapWithEvery(matchers.into_iter().map(nested).collect()))
+        self.map_pattern(|pattern| pattern.gap_with_every(matchers.into_iter().map(nested).collect()))
     }
 
     /// Constrains the gap before the next selector to contain at least one
     /// match for any of the nested matchers.
     pub fn gap_with_any(self, matchers: Vec<Matcher>) -> Self {
-        assert!(!matchers.is_empty(), "gap_with_any() requires at least one matcher");
-        self.gap(Step::GapWithAny(matchers.into_iter().map(nested).collect()))
+        self.map_pattern(|pattern| pattern.gap_with_any(matchers.into_iter().map(nested).collect()))
     }
 
     /// Requires the next selector to match a direct child, like the `>` CSS combinator.
     pub fn direct(self) -> Self {
-        assert!(!self.steps.is_empty(), "direct() cannot be the first selector");
-        assert!(self.steps.last().is_some_and(Step::is_element), "direct() must follow an element selector");
-        self.gap(Step::Direct)
+        self.map_pattern(MatchPattern::direct)
     }
 
-    /// Appends a link to the ancestry chain.
-    fn step(mut self, step: Step) -> Self {
+    fn map_pattern(mut self, f: impl FnOnce(MatchPattern) -> MatchPattern) -> Self {
         assert!(
             self.callback.is_none() && self.text_callback.is_none() && self.aggregated_text_callback.is_none() && self.comment_callback.is_none(),
             "selectors must be added before callbacks"
         );
-        self.steps.push(step);
-        self
-    }
-
-    /// Appends a constrained gap to the ancestry chain.
-    fn gap(mut self, gap: Step) -> Self {
-        assert!(
-            self.callback.is_none() && self.text_callback.is_none() && self.aggregated_text_callback.is_none() && self.comment_callback.is_none(),
-            "selectors must be added before callbacks"
-        );
-        assert!(!matches!(self.steps.last(), Some(Step::Direct)), "direct() must be followed by an element selector");
-        self.steps.push(gap);
+        self.pattern = f(self.pattern);
         self
     }
 
     /// Registers `callback` to run once for each element matched by the whole chain,
     /// like the [`element!`](lol_html::element) macro.
     pub fn on_each(mut self, callback: impl Callback) -> Self {
-        assert!(!self.steps.is_empty(), "on_each() requires a selector to be added first");
+        assert!(!self.pattern.steps().is_empty(), "on_each() requires a selector to be added first");
         assert!(self.callback.is_none(), "on_each() can only be called once");
         self.callback = Some(Box::new(callback));
         self
@@ -195,7 +176,7 @@ impl Matcher {
     /// Registers `callback` to run for each text chunk inside elements matched by the whole chain,
     /// like the [`text!`](lol_html::text) macro.
     pub fn on_text_chunk(mut self, callback: impl TextCallback) -> Self {
-        assert!(!self.steps.is_empty(), "on_text_chunk() requires a selector to be added first");
+        assert!(!self.pattern.steps().is_empty(), "on_text_chunk() requires a selector to be added first");
         assert!(self.text_callback.is_none(), "on_text_chunk() can only be called once");
         self.text_callback = Some(Box::new(callback));
         self
@@ -204,7 +185,7 @@ impl Matcher {
     /// Registers `callback` to run once per element matched by the whole chain with the combined
     /// text of that element and all its descendants, like jQuery's [`.text()`](https://api.jquery.com/text/).
     pub fn on_text(mut self, callback: impl AggregatedTextCallback) -> Self {
-        assert!(!self.steps.is_empty(), "on_text() requires a selector to be added first");
+        assert!(!self.pattern.steps().is_empty(), "on_text() requires a selector to be added first");
         assert!(self.aggregated_text_callback.is_none(), "on_text() can only be called once");
         self.aggregated_text_callback = Some(Box::new(callback));
         self
@@ -213,7 +194,7 @@ impl Matcher {
     /// Registers `callback` to run for each HTML comment inside elements matched by the whole chain,
     /// like the [`comments!`](lol_html::comments) macro.
     pub fn on_comment(mut self, callback: impl CommentCallback) -> Self {
-        assert!(!self.steps.is_empty(), "on_comment() requires a selector to be added first");
+        assert!(!self.pattern.steps().is_empty(), "on_comment() requires a selector to be added first");
         assert!(self.comment_callback.is_none(), "on_comment() can only be called once");
         self.comment_callback = Some(Box::new(callback));
         self
@@ -226,17 +207,16 @@ impl Matcher {
             self.callback.is_some() || self.text_callback.is_some() || self.aggregated_text_callback.is_some() || self.comment_callback.is_some(),
             "build() requires on_each(), on_text_chunk(), on_text() or on_comment()"
         );
-        assert!(!self.steps.is_empty(), "build() requires a selector to be added first");
-        assert!(!self.steps.last().unwrap().is_gap(), "a gap selector cannot be final in a chain");
-        if self.aggregated_text_callback.is_none() && self.steps.len() == 1 && matches!(&self.steps[0], Step::Filter(_, _)) {
+        self.pattern.validate();
+        if self.aggregated_text_callback.is_none() && self.pattern.steps().len() == 1 && matches!(&self.pattern.steps()[0], Step::Filter(_, _)) {
             return self.build_single();
         }
         self.build_chain()
     }
 
     fn build_single(self) -> Vec<HandlerEntry<'static, 'static>> {
-        let Matcher { steps, callback, text_callback, comment_callback, aggregated_text_callback: _ } = self;
-        let Step::Filter(selector, predicate) = steps.into_iter().next().unwrap() else { unreachable!() };
+        let Matcher { pattern, callback, text_callback, comment_callback, aggregated_text_callback: _ } = self;
+        let Step::Filter(selector, predicate) = pattern.into_steps().into_iter().next().unwrap() else { unreachable!() };
         if predicate.is_none() {
             let mut handlers = vec![];
             if let Some(mut callback) = callback {
@@ -335,9 +315,9 @@ impl Matcher {
     }
 
     fn build_chain(self) -> Vec<HandlerEntry<'static, 'static>> {
-        let Matcher { steps, callback, text_callback, aggregated_text_callback, comment_callback } = self;
+        let Matcher { pattern, callback, text_callback, aggregated_text_callback, comment_callback } = self;
         let mut engine = Engine::new();
-        let root = engine.add_chain(steps);
+        let root = engine.add_chain(pattern.into_steps());
         if let Some(callback) = callback {
             engine.on_match(root, callback);
         }

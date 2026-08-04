@@ -547,13 +547,13 @@ fn matcher_direct_must_precede_element() {
 }
 
 #[test]
-#[should_panic(expected = "a nested matcher needs at least one selector")]
+#[should_panic(expected = "a matcher needs at least one selector")]
 fn matcher_nested_empty() {
     Matcher::new().not(Matcher::new()).on_each(|_| {}).build();
 }
 
 #[test]
-#[should_panic(expected = "a nested matcher cannot end with a gap selector")]
+#[should_panic(expected = "a gap selector cannot be final in a chain")]
 fn matcher_nested_ends_with_gap() {
     Matcher::new().not(Matcher::new().css("a").direct()).on_each(|_| {}).build();
 }
