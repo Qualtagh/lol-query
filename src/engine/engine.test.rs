@@ -68,18 +68,18 @@ fn check_two_chains(left: Vec<Step>, right: Vec<Step>, html: &str, expected_left
 
 #[test]
 fn engine() {
-    // on_match — single chain still matches through the extracted engine
+    // on_match - single chain still matches through the extracted engine
     check_match(css("div"), r#"<div id="a"></div><span id="b"></span>"#, "a");
 
-    // on_enter / on_exit — nested matches get distinct ids; exits are LIFO
+    // on_enter / on_exit - nested matches get distinct ids; exits are LIFO
     check_enter_exit(css("div"), r#"<div id="a"><div id="b"></div></div>"#, "+0:a +1:b -1 -0");
 
-    // on_enter / on_exit — void elements enter and exit immediately
+    // on_enter / on_exit - void elements enter and exit immediately
     check_enter_exit(css("img"), r#"<img id="a"><span id="b"></span>"#, "+0:a -0");
 
-    // two chains on one Engine — one combine pass, independent callbacks
+    // two chains on one Engine - one combine pass, independent callbacks
     check_two_chains(css("div"), css("span"), r#"<div id="a"></div><span id="b"></span><div id="c"><span id="d"></span></div>"#, "a c", "b d");
 
-    // two chains — an element matched by both is reported on both
+    // two chains - an element matched by both is reported on both
     check_two_chains(css("div"), css(".item"), r#"<div class="item" id="a"></div><div id="b"></div>"#, "a b", "a");
 }

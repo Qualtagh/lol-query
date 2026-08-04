@@ -1,9 +1,9 @@
 //! ## Present
 //!
-//! - [`physical`] — kernels for the streaming rewrite: downward birth
+//! - [`physical`] - kernels for the streaming rewrite: downward birth
 //!   gating (`down_ok`), scope-tree ancestry, and activation frames.
-//! - [`representation`] — identity keys and path AST. Relational IR arrives next.
-//! - [`offline`] — full-DOM facade over `scraper` plus path denotation.
+//! - [`representation`] - identity keys and path AST. Relational IR arrives next.
+//! - [`offline`] - full-DOM facade over `scraper` plus path denotation.
 //!   Relational evaluation comes next.
 //!
 //! ## Later

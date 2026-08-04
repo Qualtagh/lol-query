@@ -44,13 +44,13 @@ fn axes_compose_filter() {
         "#,
     );
 
-    // C — immediate children, document order
+    // C - immediate children, document order
     check(&dom, "list", Path::child_axis(), &["a", "b", "c"]);
 
-    // C* — descendants, document order (nested span before following li)
+    // C* - descendants, document order (nested span before following li)
     check(&dom, "list", Path::descendants(), &["a", "b", "s", "c"]);
 
-    // P / P* — parent, then ancestors nearest-first
+    // P / P* - parent, then ancestors nearest-first
     check(&dom, "s", Path::parent(), &["b"]);
     check(&dom, "s", Path::parent_axis().plus(), &["b", "list", "html", "@root"]);
 
@@ -71,7 +71,7 @@ fn axes_compose_filter() {
     // compose P;N
     check(&dom, "s", Path::parent().then(Path::next()), &["c"]);
 
-    // C ; [css] — cheerio children().filter()
+    // C ; [css] - cheerio children().filter()
     check(&dom, "list", Path::child_axis().filter(css("#b")), &["b"]);
     check(&dom, "list", Path::child_axis().filter(css("span")), &[]);
 
