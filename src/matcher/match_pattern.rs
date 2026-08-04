@@ -1,6 +1,6 @@
 //! Immutable ancestry / gap hierarchy shared by [`Matcher`](crate::Matcher) and plan IR.
 
-use crate::engine::{Predicate, Step};
+use super::{Predicate, Step};
 
 /// Validated Matcher hierarchy: element selectors, gaps, and nested combinators.
 pub(crate) struct MatchPattern {

@@ -6,8 +6,10 @@ use lol_html::{HandlerResult, LocalHandlerTypes, comments, element, text};
 
 use crate::ElementView;
 use crate::HandlerEntry;
-use crate::engine::{AggregatedTextCallback, Callback, CommentCallback, Engine, Predicate, Step, TextCallback};
-use crate::match_pattern::MatchPattern;
+use crate::engine::{AggregatedTextCallback, Callback, CommentCallback, Engine, TextCallback};
+
+use super::match_pattern::MatchPattern;
+use super::{Predicate, Step};
 
 type El<'r, 't> = Element<'r, 't, LocalHandlerTypes>;
 

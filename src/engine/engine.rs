@@ -6,12 +6,12 @@ use lol_html::{HandlerResult, LocalHandlerTypes, comments, element, text};
 
 use crate::ElementView;
 use crate::HandlerEntry;
-use crate::general_regex::{GenRegExp, Pattern};
+use crate::matcher::{Predicate, Step};
+use crate::util::{GenRegExp, Pattern};
+
+use super::{ChainId, InstanceId};
 
 type El<'r, 't> = Element<'r, 't, LocalHandlerTypes>;
-
-pub(crate) trait Predicate: for<'a> Fn(&ElementView<'a>) -> bool + 'static {}
-impl<F: for<'a> Fn(&ElementView<'a>) -> bool + 'static> Predicate for F {}
 
 pub(crate) trait Callback: for<'r, 't> FnMut(&mut El<'r, 't>) + 'static {}
 impl<F: for<'r, 't> FnMut(&mut El<'r, 't>) + 'static> Callback for F {}
@@ -24,46 +24,6 @@ impl<F: FnMut(&str) + 'static> AggregatedTextCallback for F {}
 
 pub(crate) trait CommentCallback: FnMut(&mut Comment<'_>) + 'static {}
 impl<F: FnMut(&mut Comment<'_>) + 'static> CommentCallback for F {}
-
-/// One open match of one Engine chain.
-///
-/// Two chains matching the same `<a>` get two instances.
-/// Frames, exit hooks, and text aggregation key off this (“this activation ended”).
-/// Not a [`NodeId`](crate::plan::representation::id::NodeId) (that is the DOM node ID).
-pub(crate) type InstanceId = u64;
-
-/// Index of a compiled ancestry chain in an [`Engine`].
-pub(crate) type ChainId = usize;
-
-/// One link of an ancestry chain.
-pub(crate) enum Step {
-    /// A CSS selector, optionally paired with a predicate on the candidate element.
-    Filter(String, Option<Box<dyn Predicate>>),
-    /// Elements that the nested chain does not match.
-    Not(Vec<Step>),
-    /// Elements that all of the nested chains match.
-    Every(Vec<Vec<Step>>),
-    /// Elements that at least one of the nested chains matches.
-    Any(Vec<Vec<Step>>),
-    /// A gap containing no element matched by the nested chain.
-    GapWithout(Vec<Step>),
-    /// A gap containing matches for every nested chain, in any order.
-    GapWithEvery(Vec<Vec<Step>>),
-    /// A gap containing an element matched by at least one nested chain.
-    GapWithAny(Vec<Vec<Step>>),
-    /// A zero-length gap: the next selector must match a direct child.
-    Direct,
-}
-
-impl Step {
-    pub(crate) fn is_gap(&self) -> bool {
-        matches!(self, Step::GapWithout(_) | Step::GapWithEvery(_) | Step::GapWithAny(_) | Step::Direct)
-    }
-
-    pub(crate) fn is_element(&self) -> bool {
-        matches!(self, Step::Filter(_, _) | Step::Not(_) | Step::Every(_) | Step::Any(_))
-    }
-}
 
 /// A [`Step`] compiled into indices into [`State`].
 enum Test {

@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use crate::match_pattern::MatchPattern;
+use crate::matcher::MatchPattern;
 
 /// Boolean node test (predicate): `false`, `true`, matcher, NOT, OR, AND.
 ///

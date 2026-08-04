@@ -1,11 +1,8 @@
-mod element_view;
+mod bridge;
 mod engine;
-mod general_regex;
-mod match_pattern;
 mod matcher;
 mod plan;
-mod settings;
+mod util;
 
-pub use element_view::{AttributeView, ElementView};
+pub use bridge::{AttributeView, ElementView, HandlerEntry, SettingsExt};
 pub use matcher::Matcher;
-pub use settings::{HandlerEntry, SettingsExt};

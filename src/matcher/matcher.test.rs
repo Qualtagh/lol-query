@@ -156,10 +156,10 @@ fn matcher_operation_count(depth: usize) -> usize {
         .on_each(move |_| *matches_for_callback.borrow_mut() += 1)
         .build();
 
-    crate::general_regex::reset_operation_count();
+    crate::util::reset_operation_count();
     exec(handlers, &nested_html(depth));
     assert_eq!(*matches.borrow(), 1);
-    crate::general_regex::operation_count()
+    crate::util::operation_count()
 }
 
 #[test]

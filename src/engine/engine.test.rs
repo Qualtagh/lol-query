@@ -3,8 +3,10 @@ use std::rc::Rc;
 
 use lol_html::{HtmlRewriter, Settings};
 
-use super::{Engine, InstanceId, Step};
+use super::Engine;
 use crate::SettingsExt;
+use crate::engine::InstanceId;
+use crate::matcher::Step;
 
 type Log = Rc<RefCell<Vec<String>>>;
 
