@@ -1,6 +1,7 @@
-use super::{Registry, Value, eval};
+use super::eval;
 use crate::matcher::MatchPattern;
 use crate::plan::offline::dom::Dom;
+use crate::plan::registry::{Registry, Value};
 use crate::plan::representation::expr::Expr;
 use crate::plan::representation::id::{ColId, MonoidId, RelationId};
 use crate::plan::representation::path::Path;
@@ -46,7 +47,7 @@ fn register_list_push(registry: &mut Registry) -> MonoidId {
 /// }
 /// ```
 ///
-/// Plan: Root → Expand(C⁺;[.item]) → Project(Apply(unwrap, Field id)) → Fold → Return
+/// Plan: Root → Expand(C*;[.item]) → Project(Apply(unwrap, Field id)) → Fold → Return
 fn item_ids_plan(registry: &mut Registry) -> Plan {
     let unwrap = registry.register_apply(unwrap_or_empty_str);
     let list = register_list_push(registry);

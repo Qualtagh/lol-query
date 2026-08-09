@@ -3,14 +3,19 @@
 //! - [`physical`] - kernels for the streaming rewrite: downward birth
 //!   gating (`down_ok`), scope-tree ancestry, and activation frames.
 //! - [`representation`] - identity keys, path AST, expr/rel IR, frozen plan graph.
+//! - [`registry`] - opaque Apply / Fold monoids and runtime values.
+//! - [`builder`] - typed hand API → logical IR (flat subset).
 //! - [`offline`] - full-DOM facade over `scraper`, path denotation, and flat
-//!   relational eval.
+//!   relational eval (test reference; later runtime mode).
 //!
 //! ## Later
 //!
-//! Hand builder, lowering onto Engine, and a public `Plan` shell.
+//! Lowering onto Engine, and a public `Plan` shell.
+
+mod builder;
+mod physical;
+mod registry;
+mod representation;
 
 #[cfg(test)]
 mod offline;
-mod physical;
-mod representation;

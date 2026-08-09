@@ -1,4 +1,4 @@
-# lol-query
+# LOL Query
 
 <p align="center">
     <a href="https://github.com/Qualtagh/lol-query">
