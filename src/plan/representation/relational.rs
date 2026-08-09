@@ -12,7 +12,7 @@ use super::path::Path;
 /// q ::= Root | Expand | Select | Project | UnionAll | DistinctBy | Fold | Take
 /// ```
 #[derive(Debug, Clone)]
-pub(crate) enum Rel {
+pub(crate) enum RelationalOperator {
     /// One row binding the synthetic document root.
     Root {
         output: ColId,
@@ -59,7 +59,7 @@ pub(crate) enum Rel {
     },
 }
 
-impl Rel {
+impl RelationalOperator {
     pub(crate) fn root(output: ColId) -> Self {
         Self::Root { output }
     }
@@ -125,18 +125,18 @@ impl Sink {
 /// `relations[i]` is the node addressed by [`RelationId::new`]`(i)`.
 #[derive(Debug, Clone)]
 pub(crate) struct Plan {
-    pub(crate) relations: Box<[Rel]>,
+    pub(crate) relations: Box<[RelationalOperator]>,
     pub(crate) sinks: Box<[Sink]>,
     /// `None` means `Return(())` (sinks-only / unit plan).
     pub(crate) ret: Option<Return>,
 }
 
 impl Plan {
-    pub(crate) fn new(relations: impl Into<Box<[Rel]>>, sinks: impl Into<Box<[Sink]>>, ret: Option<Return>) -> Self {
+    pub(crate) fn new(relations: impl Into<Box<[RelationalOperator]>>, sinks: impl Into<Box<[Sink]>>, ret: Option<Return>) -> Self {
         Self { relations: relations.into(), sinks: sinks.into(), ret }
     }
 
-    pub(crate) fn rel(&self, id: RelationId) -> &Rel {
+    pub(crate) fn rel(&self, id: RelationId) -> &RelationalOperator {
         &self.relations[id.raw() as usize]
     }
 

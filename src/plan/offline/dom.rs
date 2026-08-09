@@ -84,7 +84,7 @@ impl Dom {
         if id == self.root {
             return None;
         }
-        self.node_ref(id)?.next_siblings().find(|sib| sib.value().is_element()).map(|sib| self.plan_id(sib.id()))
+        self.node_ref(id)?.next_siblings().find(|sibling| sibling.value().is_element()).map(|sibling| self.plan_id(sibling.id()))
     }
 
     /// Previous element sibling along.
@@ -92,7 +92,7 @@ impl Dom {
         if id == self.root {
             return None;
         }
-        self.node_ref(id)?.prev_siblings().find(|sib| sib.value().is_element()).map(|sib| self.plan_id(sib.id()))
+        self.node_ref(id)?.prev_siblings().find(|sibling| sibling.value().is_element()).map(|sibling| self.plan_id(sibling.id()))
     }
 
     /// Element tag name in lowercase, or `None` for root.

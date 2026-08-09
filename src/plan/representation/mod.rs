@@ -8,4 +8,4 @@ pub(crate) mod expr;
 pub(crate) mod id;
 pub(crate) mod path;
 pub(crate) mod path_extension;
-pub(crate) mod rel;
+pub(crate) mod relational;
