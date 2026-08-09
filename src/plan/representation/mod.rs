@@ -1,9 +1,11 @@
 //! Logical plan representation.
 //!
-//! Identity keys and path AST. Relational operators arrive in later strata.
+//! Identity keys, path AST, scalar expressions, and the frozen relational graph.
 
 #![allow(dead_code)]
 
+pub(crate) mod expr;
 pub(crate) mod id;
 pub(crate) mod path;
 pub(crate) mod path_extension;
+pub(crate) mod rel;
