@@ -23,6 +23,9 @@ opaque_id! {
     ///
     /// Shared across Engine chains: two chains matching the same `<a>` share one `NodeId`.
     /// DistinctBy, union, and path join use this to detect "same element".
+    /// - Streaming: Engine mints one id per element enter (see [`crate::engine`]).
+    /// - Offline: the scraper Dom facade assigns ids over the full tree.
+    ///
     /// Not an Engine [`InstanceId`](crate::engine::InstanceId) (that is one chain's open match).
     NodeId
 }

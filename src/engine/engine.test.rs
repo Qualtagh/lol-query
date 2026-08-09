@@ -41,7 +41,7 @@ fn check_enter_exit(steps: Vec<Step>, html: &str, expected: &str) {
     let exit_log = events.clone();
     let mut engine = Engine::new();
     let chain = engine.add_chain(steps);
-    engine.on_enter(chain, move |id: InstanceId, _depth, el| {
+    engine.on_enter(chain, move |id: InstanceId, _node_id, _depth, el| {
         enter_log.borrow_mut().push(format!("+{id}:{}", el.get_attribute("id").unwrap_or_default()));
     });
     engine.on_exit(chain, move |id: InstanceId| {
@@ -66,12 +66,31 @@ fn check_two_chains(left: Vec<Step>, right: Vec<Step>, html: &str, expected_left
     assert_eq!(right_ids.borrow().join(" "), expected_right);
 }
 
+fn check_enter_nodes(left: Vec<Step>, right: Vec<Step>, html: &str, expected_left: &str, expected_right: &str) {
+    let left_log = log();
+    let right_log = log();
+    let left2 = left_log.clone();
+    let right2 = right_log.clone();
+    let mut engine = Engine::new();
+    let left_chain = engine.add_chain(left);
+    let right_chain = engine.add_chain(right);
+    engine.on_enter(left_chain, move |_instance, node_id, _depth, el| {
+        left2.borrow_mut().push(format!("{}:{node_id}", el.get_attribute("id").unwrap_or_default()));
+    });
+    engine.on_enter(right_chain, move |_instance, node_id, _depth, el| {
+        right2.borrow_mut().push(format!("{}:{node_id}", el.get_attribute("id").unwrap_or_default()));
+    });
+    exec(engine.into_handlers(), html);
+    assert_eq!(left_log.borrow().join(" "), expected_left);
+    assert_eq!(right_log.borrow().join(" "), expected_right);
+}
+
 #[test]
 fn engine() {
     // on_match - single chain still matches through the extracted engine
     check_match(css("div"), r#"<div id="a"></div><span id="b"></span>"#, "a");
 
-    // on_enter / on_exit - nested matches get distinct ids; exits are LIFO
+    // on_enter / on_exit - nested matches get distinct instance ids; exits are LIFO
     check_enter_exit(css("div"), r#"<div id="a"><div id="b"></div></div>"#, "+0:a +1:b -1 -0");
 
     // on_enter / on_exit - void elements enter and exit immediately
@@ -82,4 +101,13 @@ fn engine() {
 
     // two chains - an element matched by both is reported on both
     check_two_chains(css("div"), css(".item"), r#"<div class="item" id="a"></div><div id="b"></div>"#, "a b", "a");
+}
+
+#[test]
+fn shared_node_id() {
+    // same element → same node id on both chains; distinct elements → distinct ids
+    check_enter_nodes(css("div"), css(".item"), r#"<div class="item" id="a"></div><div id="b"></div>"#, "a:0 b:1", "a:0");
+
+    // nested matched elements get distinct node ids
+    check_enter_nodes(css("div"), css("span"), r#"<div id="a"><div id="b"></div></div>"#, "a:0 b:1", "");
 }

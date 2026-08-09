@@ -153,8 +153,12 @@ impl Program {
     }
 }
 
-pub(crate) trait EnterCallback: for<'r, 't> FnMut(InstanceId, u32, &mut El<'r, 't>) + 'static {}
-impl<F: for<'r, 't> FnMut(InstanceId, u32, &mut El<'r, 't>) + 'static> EnterCallback for F {}
+/// `(instance, node_id, depth, element)`.
+///
+/// `node_id` is the canonical DOM node for this enter (same value for every chain that
+/// matches the element). Wrap with plan `NodeId::new` — not an [`InstanceId`].
+pub(crate) trait EnterCallback: for<'r, 't> FnMut(InstanceId, u64, u32, &mut El<'r, 't>) + 'static {}
+impl<F: for<'r, 't> FnMut(InstanceId, u64, u32, &mut El<'r, 't>) + 'static> EnterCallback for F {}
 
 pub(crate) trait ExitCallback: FnMut(InstanceId) + 'static {}
 impl<F: FnMut(InstanceId) + 'static> ExitCallback for F {}
@@ -218,8 +222,10 @@ struct State {
     regexp_states: Vec<usize>,
     /// Number of currently open elements (shared nesting depth).
     depth: u32,
-    /// Next instance id to allocate.
+    /// Next instance id to allocate (per-chain activation).
     next_instance_id: InstanceId,
+    /// Next plan NodeId raw value to allocate (once per element enter, shared across chains).
+    next_node_id: u64,
     /// Per-depth slots for sibling summaries and subscriptions.
     depth_slots: Vec<DepthSlot>,
     /// Text chunks seen under currently open aggregated-text matches; each chunk is stored once.
@@ -264,7 +270,7 @@ impl Engine {
         self.binding(chain).on_match = Some(Box::new(callback));
     }
 
-    /// Runs `callback` when `chain` matches, with the allocated instance id.
+    /// Runs `callback` when `chain` matches, with instance id and shared node id.
     #[allow(dead_code)]
     pub(crate) fn on_enter(&mut self, chain: ChainId, callback: impl EnterCallback) {
         self.binding(chain).on_enter = Some(Box::new(callback));
@@ -325,6 +331,7 @@ impl Engine {
             regexp_states: chains.iter().map(|chain| chain.regexp.start_state()).collect(),
             depth: 0,
             next_instance_id: 0,
+            next_node_id: 0,
             depth_slots: vec![DepthSlot::default()],
             text_chunks: vec![],
             chains: (0..chains.len()).map(|_| ChainState::default()).collect(),
@@ -350,7 +357,7 @@ impl Engine {
         let shared_for_combine = shared.clone();
         let aggregated_flags_for_text = aggregated_flags.clone();
         let combine = element!("*", move |el: &mut El<'_, '_>| -> HandlerResult {
-            let mut pending: Vec<(usize, InstanceId, u32, bool)> = Vec::new();
+            let mut pending: Vec<(usize, InstanceId, u64, u32, bool)> = Vec::new();
             {
                 let state = &mut *shared_for_combine.borrow_mut();
                 let parent_states = state.regexp_states.clone();
@@ -366,6 +373,9 @@ impl Engine {
                 state.hits.fill(false);
                 let parent_depth = state.depth;
                 let child_depth = parent_depth + 1;
+                // One NodeId raw value per element enter — shared by every chain that matches.
+                let node_id = state.next_node_id;
+                state.next_node_id += 1;
                 if let Some(end_tag_handlers) = el.end_tag_handlers() {
                     state.regexp_states = child_states;
                     state.depth = child_depth;
@@ -385,7 +395,7 @@ impl Engine {
                     let instance = state.next_instance_id;
                     state.next_instance_id += 1;
                     let Some(end_tag_handlers) = el.end_tag_handlers() else {
-                        pending.push((chain_id, instance, child_depth, true));
+                        pending.push((chain_id, instance, node_id, child_depth, true));
                         continue;
                     };
                     state.chains[chain_id].open_instances.push(instance);
@@ -440,15 +450,15 @@ impl Engine {
                         }
                         Ok(())
                     }));
-                    pending.push((chain_id, instance, child_depth, false));
+                    pending.push((chain_id, instance, node_id, child_depth, false));
                 }
             }
-            for (chain_id, instance, depth, exit_now) in pending {
+            for (chain_id, instance, node_id, depth, exit_now) in pending {
                 if let Some(callback) = on_match[chain_id].as_mut() {
                     callback(el);
                 }
                 if let Some(callback) = on_enter[chain_id].as_mut() {
-                    callback(instance, depth, el);
+                    callback(instance, node_id, depth, el);
                 }
                 if !exit_now {
                     continue;
