@@ -30,7 +30,10 @@ fn check_match(steps: Vec<Step>, html: &str, expected: &str) {
     let ids2 = ids.clone();
     let mut engine = Engine::new();
     let chain = engine.add_chain(steps);
-    engine.on_match(chain, move |el| ids2.borrow_mut().push(el.get_attribute("id").unwrap_or_default()));
+    engine.on_match(chain, move |el| {
+        ids2.borrow_mut().push(el.get_attribute("id").unwrap_or_default());
+        Ok(())
+    });
     exec(engine.into_handlers(), html);
     assert_eq!(ids.borrow().join(" "), expected);
 }
@@ -43,9 +46,11 @@ fn check_enter_exit(steps: Vec<Step>, html: &str, expected: &str) {
     let chain = engine.add_chain(steps);
     engine.on_enter(chain, move |id: InstanceId, _node_id, _depth, el| {
         enter_log.borrow_mut().push(format!("+{id}:{}", el.get_attribute("id").unwrap_or_default()));
+        Ok(())
     });
     engine.on_exit(chain, move |id: InstanceId| {
         exit_log.borrow_mut().push(format!("-{id}"));
+        Ok(())
     });
     exec(engine.into_handlers(), html);
     assert_eq!(events.borrow().join(" "), expected);
@@ -59,8 +64,14 @@ fn check_two_chains(left: Vec<Step>, right: Vec<Step>, html: &str, expected_left
     let mut engine = Engine::new();
     let left_chain = engine.add_chain(left);
     let right_chain = engine.add_chain(right);
-    engine.on_match(left_chain, move |el| left2.borrow_mut().push(el.get_attribute("id").unwrap_or_default()));
-    engine.on_match(right_chain, move |el| right2.borrow_mut().push(el.get_attribute("id").unwrap_or_default()));
+    engine.on_match(left_chain, move |el| {
+        left2.borrow_mut().push(el.get_attribute("id").unwrap_or_default());
+        Ok(())
+    });
+    engine.on_match(right_chain, move |el| {
+        right2.borrow_mut().push(el.get_attribute("id").unwrap_or_default());
+        Ok(())
+    });
     exec(engine.into_handlers(), html);
     assert_eq!(left_ids.borrow().join(" "), expected_left);
     assert_eq!(right_ids.borrow().join(" "), expected_right);
@@ -76,9 +87,11 @@ fn check_enter_nodes(left: Vec<Step>, right: Vec<Step>, html: &str, expected_lef
     let right_chain = engine.add_chain(right);
     engine.on_enter(left_chain, move |_instance, node_id, _depth, el| {
         left2.borrow_mut().push(format!("{}:{node_id}", el.get_attribute("id").unwrap_or_default()));
+        Ok(())
     });
     engine.on_enter(right_chain, move |_instance, node_id, _depth, el| {
         right2.borrow_mut().push(format!("{}:{node_id}", el.get_attribute("id").unwrap_or_default()));
+        Ok(())
     });
     exec(engine.into_handlers(), html);
     assert_eq!(left_log.borrow().join(" "), expected_left);

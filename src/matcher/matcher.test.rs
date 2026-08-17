@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use lol_html::errors::RewritingError;
 use lol_html::html_content::ContentType;
 use lol_html::{HtmlRewriter, Settings};
 
@@ -39,32 +40,38 @@ fn exec(handlers: Vec<crate::HandlerEntry<'static, 'static>>, html: &str) {
 fn attach(matcher: Matcher, logs: &Logs) -> Vec<crate::HandlerEntry<'static, 'static>> {
     let mut matcher = matcher;
     if let Some(log) = logs.each.clone() {
-        matcher = matcher.on_each(move |el| log.borrow_mut().push(el.get_attribute("id").unwrap_or_default()));
+        matcher = matcher.on_each(move |el| {
+            log.borrow_mut().push(el.get_attribute("id").unwrap_or_default());
+            Ok(())
+        });
     }
     if let Some(log) = logs.text_chunk.clone() {
         matcher = matcher.on_text_chunk(move |chunk| {
             let s = chunk.as_str();
             if s.is_empty() {
-                return;
+                return Ok(());
             }
             log.borrow_mut().push(s.to_string());
+            Ok(())
         });
     }
     if let Some(log) = logs.text.clone() {
         matcher = matcher.on_text(move |aggregated| {
             if aggregated.is_empty() {
-                return;
+                return Ok(());
             }
             log.borrow_mut().push(aggregated.to_string());
+            Ok(())
         });
     }
     if let Some(log) = logs.comment.clone() {
         matcher = matcher.on_comment(move |comment| {
             let s = comment.text();
             if s.is_empty() {
-                return;
+                return Ok(());
             }
             log.borrow_mut().push(s);
+            Ok(())
         });
     }
     matcher.build()
@@ -120,6 +127,22 @@ fn rewrite(handlers: Vec<crate::HandlerEntry<'static, 'static>>, html: &str) -> 
     String::from_utf8(out).unwrap()
 }
 
+fn rewrite_err(handlers: Vec<crate::HandlerEntry<'static, 'static>>, html: &str) -> RewritingError {
+    let mut out = vec![];
+    let mut rw = HtmlRewriter::new(Settings::new().add_handlers(handlers), |c: &[u8]| out.extend_from_slice(c));
+    match rw.write(html.as_bytes()) {
+        Err(err) => err,
+        Ok(()) => rw.end().unwrap_err(),
+    }
+}
+
+fn check_abort(build: impl FnOnce(Log) -> Matcher, html: &str, expected: &str) {
+    let log = log();
+    let err = rewrite_err(build(log.clone()).build(), html);
+    assert!(matches!(err, RewritingError::ContentHandlerError(_)));
+    assert_eq!(log.borrow().join(" "), expected);
+}
+
 fn check_html(matcher: Matcher, html: &str, expected: &str) {
     assert_eq!(rewrite(matcher.build(), html), expected);
 }
@@ -153,7 +176,10 @@ fn matcher_operation_count(depth: usize) -> usize {
         .css(".root")
         .gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")])
         .css(".target")
-        .on_each(move |_| *matches_for_callback.borrow_mut() += 1)
+        .on_each(move |_| {
+            *matches_for_callback.borrow_mut() += 1;
+            Ok(())
+        })
         .build();
 
     crate::util::reset_operation_count();
@@ -525,49 +551,49 @@ fn matcher_comparisons() {
 #[test]
 #[should_panic(expected = "a gap selector cannot be final in a chain")]
 fn matcher_gap_cannot_be_final() {
-    Matcher::new().css("div").gap_without(Matcher::new().css("span")).on_each(|_| {}).build();
+    Matcher::new().css("div").gap_without(Matcher::new().css("span")).on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "direct() cannot be the first selector")]
 fn matcher_direct_cannot_be_first() {
-    Matcher::new().direct().css("div").on_each(|_| {}).build();
+    Matcher::new().direct().css("div").on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "direct() must follow an element selector")]
 fn matcher_direct_must_follow_element() {
-    Matcher::new().css("a").gap_without(Matcher::new().css("b")).direct().css("i").on_each(|_| {}).build();
+    Matcher::new().css("a").gap_without(Matcher::new().css("b")).direct().css("i").on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "direct() must be followed by an element selector")]
 fn matcher_direct_must_precede_element() {
-    Matcher::new().css("a").direct().gap_without(Matcher::new().css("b")).css("i").on_each(|_| {}).build();
+    Matcher::new().css("a").direct().gap_without(Matcher::new().css("b")).css("i").on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "a matcher needs at least one selector")]
 fn matcher_nested_empty() {
-    Matcher::new().not(Matcher::new()).on_each(|_| {}).build();
+    Matcher::new().not(Matcher::new()).on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "a gap selector cannot be final in a chain")]
 fn matcher_nested_ends_with_gap() {
-    Matcher::new().not(Matcher::new().css("a").direct()).on_each(|_| {}).build();
+    Matcher::new().not(Matcher::new().css("a").direct()).on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "a nested matcher must not have an on_each() callback")]
 fn matcher_nested_with_callback() {
-    Matcher::new().not(Matcher::new().css("a").on_each(|_| {})).on_each(|_| {}).build();
+    Matcher::new().not(Matcher::new().css("a").on_each(|_| Ok(()))).on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "selectors must be added before callbacks")]
 fn matcher_selectors_before_callbacks() {
-    Matcher::new().css("div").on_each(|_| {}).css("span").build();
+    Matcher::new().css("div").on_each(|_| Ok(())).css("span").build();
 }
 
 #[test]
@@ -579,19 +605,19 @@ fn matcher_build_requires_callback() {
 #[test]
 #[should_panic(expected = "every() requires at least one matcher")]
 fn matcher_every_requires_matchers() {
-    Matcher::new().every(vec![]).on_each(|_| {}).build();
+    Matcher::new().every(vec![]).on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "gap_with_every() requires at least one matcher")]
 fn matcher_gap_with_every_requires_matchers() {
-    Matcher::new().gap_with_every(vec![]).css("i").on_each(|_| {}).build();
+    Matcher::new().gap_with_every(vec![]).css("i").on_each(|_| Ok(())).build();
 }
 
 #[test]
 #[should_panic(expected = "gap_with_any() requires at least one matcher")]
 fn matcher_gap_with_any_requires_matchers() {
-    Matcher::new().gap_with_any(vec![]).css("i").on_each(|_| {}).build();
+    Matcher::new().gap_with_any(vec![]).css("i").on_each(|_| Ok(())).build();
 }
 
 #[test]
@@ -612,6 +638,7 @@ fn matcher_modifications() {
     check_html(
         Matcher::new().css("i").on_each(|el| {
             el.set_attribute("class", "done").unwrap();
+            Ok(())
         }),
         r#"<i id="a"></i><b id="b"></b>"#,
         r#"<i id="a" class="done"></i><b id="b"></b>"#,
@@ -621,6 +648,7 @@ fn matcher_modifications() {
     check_html(
         Matcher::new().css(".root").css(".target").on_each(|el| {
             el.set_inner_content("X", ContentType::Html);
+            Ok(())
         }),
         r#"<div class="root"><i class="target">old</i></div><i class="target">skip</i>"#,
         r#"<div class="root"><i class="target">X</i></div><i class="target">skip</i>"#,
@@ -628,7 +656,10 @@ fn matcher_modifications() {
 
     // filter() - remove_attribute()
     check_html(
-        Matcher::new().filter("i", |el| el.get_attribute("data-x").as_deref() == Some("main")).on_each(|el| el.remove_attribute("data-x")),
+        Matcher::new().filter("i", |el| el.get_attribute("data-x").as_deref() == Some("main")).on_each(|el| {
+            el.remove_attribute("data-x");
+            Ok(())
+        }),
         r#"<i data-x="main" id="a"></i><i data-x="other" id="b"></i>"#,
         r#"<i id="a"></i><i data-x="other" id="b"></i>"#,
     );
@@ -637,6 +668,7 @@ fn matcher_modifications() {
     check_html(
         Matcher::new().not(Matcher::new().css(".skip")).on_each(|el| {
             el.replace("<section/>", ContentType::Html);
+            Ok(())
         }),
         r#"<div id="a"></div><div class="skip" id="b"></div>"#,
         r#"<section/><div class="skip" id="b"></div>"#,
@@ -644,29 +676,30 @@ fn matcher_modifications() {
 
     // gap_without() - append()
     check_html(
-        Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target").on_each(|el| el.append("!", ContentType::Text)),
+        Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target").on_each(|el| {
+            el.append("!", ContentType::Text);
+            Ok(())
+        }),
         r#"<div class="root"><i class="target">a</i><section class="blocked"><i class="target">x</i></section><i class="target">b</i></div>"#,
         r#"<div class="root"><i class="target">a!</i><section class="blocked"><i class="target">x</i></section><i class="target">b!</i></div>"#,
     );
 
     // gap_with_every() - prepend()
     check_html(
-        Matcher::new()
-            .css(".root")
-            .gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")])
-            .css(".target")
-            .on_each(|el| el.prepend("*", ContentType::Text)),
+        Matcher::new().css(".root").gap_with_every(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")]).css(".target").on_each(|el| {
+            el.prepend("*", ContentType::Text);
+            Ok(())
+        }),
         r#"<div class="root"><section class="red"><b class="blue"><i class="target">a</i></b></section><section class="red"><i class="target">x</i></section></div>"#,
         r#"<div class="root"><section class="red"><b class="blue"><i class="target">*a</i></b></section><section class="red"><i class="target">x</i></section></div>"#,
     );
 
     // gap_with_any() - after()
     check_html(
-        Matcher::new()
-            .css(".root")
-            .gap_with_any(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")])
-            .css(".target")
-            .on_each(|el| el.after("<mark/>", ContentType::Html)),
+        Matcher::new().css(".root").gap_with_any(vec![Matcher::new().css(".red"), Matcher::new().css(".blue")]).css(".target").on_each(|el| {
+            el.after("<mark/>", ContentType::Html);
+            Ok(())
+        }),
         r#"<div class="root"><section class="red"><i class="target">a</i></section><section><i class="target">x</i></section></div>"#,
         r#"<div class="root"><section class="red"><i class="target">a</i><mark/></section><section><i class="target">x</i></section></div>"#,
     );
@@ -675,6 +708,7 @@ fn matcher_modifications() {
     check_html(
         Matcher::new().every(vec![Matcher::new().css(".item"), Matcher::new().not(Matcher::new().css("span"))]).on_each(|el| {
             el.set_attribute("data-done", "1").unwrap();
+            Ok(())
         }),
         r#"<div class="item" id="a"></div><div id="b"></div><span class="item" id="c"></span>"#,
         r#"<div class="item" id="a" data-done="1"></div><div id="b"></div><span class="item" id="c"></span>"#,
@@ -682,7 +716,10 @@ fn matcher_modifications() {
 
     // any() - remove()
     check_html(
-        Matcher::new().any(vec![Matcher::new().css(".a"), Matcher::new().css(".b")]).on_each(|el| el.remove()),
+        Matcher::new().any(vec![Matcher::new().css(".a"), Matcher::new().css(".b")]).on_each(|el| {
+            el.remove();
+            Ok(())
+        }),
         r#"<div class="a" id="x"></div><span class="b" id="y"></span><p id="z"></p>"#,
         r#"<p id="z"></p>"#,
     );
@@ -691,6 +728,7 @@ fn matcher_modifications() {
     check_html(
         Matcher::new().css(".a").direct().css(".b").on_each(|el| {
             el.before("<mark/>", ContentType::Html);
+            Ok(())
         }),
         r#"<div class="a"><span class="b"></span></div><span class="b"></span>"#,
         r#"<div class="a"><mark/><span class="b"></span></div><span class="b"></span>"#,
@@ -708,7 +746,10 @@ fn matcher_modifications() {
                     .gap_without(Matcher::new().any(vec![Matcher::new().css(".blocked"), Matcher::new().css(".hidden")]))
                     .css(".target"),
             ])
-            .on_each(|el| el.remove_and_keep_content()),
+            .on_each(|el| {
+                el.remove_and_keep_content();
+                Ok(())
+            }),
         r#"<div class="root"><div class="red"><div class="blue"><section class="middle"><i class="target">keep</i><div class="blocked"><i class="target">skip</i></div></section></div></div></div>"#,
         r#"<div class="root"><div class="red"><div class="blue"><section class="middle">keep<div class="blocked"><i class="target">skip</i></div></section></div></div></div>"#,
     );
@@ -721,6 +762,7 @@ fn matcher_modifications() {
             } else {
                 chunk.remove();
             }
+            Ok(())
         }),
         r#"<div class="root"><i class="target">old</i><section class="blocked"><i class="target">old</i></section></div>"#,
         r#"<div class="root"><i class="target">new</i><section class="blocked"><i class="target">old</i></section></div>"#,
@@ -730,8 +772,90 @@ fn matcher_modifications() {
     check_html(
         Matcher::new().css(".root").gap_without(Matcher::new().css(".blocked")).css(".target").on_comment(|comment| {
             comment.set_text("ok").unwrap();
+            Ok(())
         }),
         r#"<div class="root"><i class="target"><!--a--></i><section class="blocked"><i class="target"><!--b--></i></section></div>"#,
         r#"<div class="root"><i class="target"><!--ok--></i><section class="blocked"><i class="target"><!--b--></i></section></div>"#,
+    );
+}
+
+#[test]
+fn matcher_callback_err_aborts() {
+    let html = r#"<div id="a">one<!--c1--></div><div id="b">two<!--c2--></div>"#;
+
+    // on_each() - single CSS
+    check_abort(
+        |log| {
+            Matcher::new().css("div").on_each(move |el| {
+                log.borrow_mut().push(el.get_attribute("id").unwrap_or_default());
+                Err("stop".into())
+            })
+        },
+        html,
+        "a",
+    );
+
+    // on_each() - filter predicate
+    check_abort(
+        |log| {
+            Matcher::new().filter("div", |el| el.get_attribute("id").as_deref() != Some("skip")).on_each(move |el| {
+                log.borrow_mut().push(el.get_attribute("id").unwrap_or_default());
+                Err("stop".into())
+            })
+        },
+        r#"<div id="skip"></div><div id="a"></div><div id="b"></div>"#,
+        "a",
+    );
+
+    // on_each() - chained selector (Engine)
+    check_abort(
+        |log| {
+            Matcher::new().css("section").css("div").on_each(move |el| {
+                log.borrow_mut().push(el.get_attribute("id").unwrap_or_default());
+                Err("stop".into())
+            })
+        },
+        r#"<section><div id="a"></div><div id="b"></div></section>"#,
+        "a",
+    );
+
+    // on_text_chunk()
+    check_abort(
+        |log| {
+            Matcher::new().css("div").on_text_chunk(move |chunk| {
+                let s = chunk.as_str();
+                if s.is_empty() {
+                    return Ok(());
+                }
+                log.borrow_mut().push(s.to_string());
+                Err("stop".into())
+            })
+        },
+        html,
+        "one",
+    );
+
+    // on_text() - aggregated text
+    check_abort(
+        |log| {
+            Matcher::new().css("div").on_text(move |aggregated| {
+                log.borrow_mut().push(aggregated.to_string());
+                Err("stop".into())
+            })
+        },
+        html,
+        "one",
+    );
+
+    // on_comment()
+    check_abort(
+        |log| {
+            Matcher::new().css("div").on_comment(move |comment| {
+                log.borrow_mut().push(comment.text());
+                Err("stop".into())
+            })
+        },
+        html,
+        "c1",
     );
 }

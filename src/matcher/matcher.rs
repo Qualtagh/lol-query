@@ -75,6 +75,7 @@ fn nested(matcher: Matcher) -> MatchPattern {
 ///     ])
 ///     .on_each(move |el| {
 ///         ids2.borrow_mut().push(el.get_attribute("id").unwrap_or_default());
+///         Ok(())
 ///     })
 ///     .build();
 ///
@@ -222,31 +223,13 @@ impl Matcher {
         if predicate.is_none() {
             let mut handlers = vec![];
             if let Some(mut callback) = callback {
-                handlers.push(
-                    element!(selector.as_str(), move |el: &mut El<'_, '_>| -> HandlerResult {
-                        callback(el);
-                        Ok(())
-                    })
-                    .into(),
-                );
+                handlers.push(element!(selector.as_str(), move |el: &mut El<'_, '_>| -> HandlerResult { callback(el) }).into());
             }
             if let Some(mut text_callback) = text_callback {
-                handlers.push(
-                    text!(selector.as_str(), move |chunk: &mut TextChunk<'_>| -> HandlerResult {
-                        text_callback(chunk);
-                        Ok(())
-                    })
-                    .into(),
-                );
+                handlers.push(text!(selector.as_str(), move |chunk: &mut TextChunk<'_>| -> HandlerResult { text_callback(chunk) }).into());
             }
             if let Some(mut comment_callback) = comment_callback {
-                handlers.push(
-                    comments!(selector.as_str(), move |comment: &mut Comment<'_>| -> HandlerResult {
-                        comment_callback(comment);
-                        Ok(())
-                    })
-                    .into(),
-                );
+                handlers.push(comments!(selector.as_str(), move |comment: &mut Comment<'_>| -> HandlerResult { comment_callback(comment) }).into());
             }
             return handlers;
         }
@@ -257,8 +240,7 @@ impl Matcher {
                 if !predicate(&ElementView::new(el)) {
                     return Ok(());
                 }
-                callback(el);
-                Ok(())
+                callback(el)
             })
             .into()];
         }
@@ -274,7 +256,7 @@ impl Matcher {
                     return Ok(());
                 }
                 if let Some(callback) = callback.as_mut() {
-                    callback(el);
+                    callback(el)?;
                 }
                 if let Some(end_tag_handlers) = el.end_tag_handlers() {
                     let active = active_for_el.clone();
@@ -294,8 +276,7 @@ impl Matcher {
                     if !*active.borrow() {
                         return Ok(());
                     }
-                    text_callback(chunk);
-                    Ok(())
+                    text_callback(chunk)
                 })
                 .into(),
             );
@@ -307,8 +288,7 @@ impl Matcher {
                     if !*active.borrow() {
                         return Ok(());
                     }
-                    comment_callback(comment);
-                    Ok(())
+                    comment_callback(comment)
                 })
                 .into(),
             );

@@ -57,14 +57,16 @@ pub(crate) fn compile(plan: Plan) -> Streaming {
         };
         frames_enter.borrow_mut().push(EXPAND_STACK, Frame::new(instance, depth, active));
         if !active {
-            return;
+            return Ok(());
         }
         let item = eval_at_enter(&map, expand_to, el, registry_enter.as_ref());
         fold_enter.borrow_mut().as_mut().expect("fold still live").append(registry_enter.as_ref(), item);
+        Ok(())
     });
 
     engine.on_exit(chain, move |_instance| {
         frames_exit.borrow_mut().pop(EXPAND_STACK);
+        Ok(())
     });
 
     Streaming::new(engine.into_handlers(), result)

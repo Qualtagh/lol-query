@@ -13,17 +13,17 @@ use super::{ChainId, InstanceId};
 
 type El<'r, 't> = Element<'r, 't, LocalHandlerTypes>;
 
-pub(crate) trait Callback: for<'r, 't> FnMut(&mut El<'r, 't>) + 'static {}
-impl<F: for<'r, 't> FnMut(&mut El<'r, 't>) + 'static> Callback for F {}
+pub(crate) trait Callback: for<'r, 't> FnMut(&mut El<'r, 't>) -> HandlerResult + 'static {}
+impl<F: for<'r, 't> FnMut(&mut El<'r, 't>) -> HandlerResult + 'static> Callback for F {}
 
-pub(crate) trait TextCallback: FnMut(&mut TextChunk<'_>) + 'static {}
-impl<F: FnMut(&mut TextChunk<'_>) + 'static> TextCallback for F {}
+pub(crate) trait TextCallback: FnMut(&mut TextChunk<'_>) -> HandlerResult + 'static {}
+impl<F: FnMut(&mut TextChunk<'_>) -> HandlerResult + 'static> TextCallback for F {}
 
-pub(crate) trait AggregatedTextCallback: FnMut(&str) + 'static {}
-impl<F: FnMut(&str) + 'static> AggregatedTextCallback for F {}
+pub(crate) trait AggregatedTextCallback: FnMut(&str) -> HandlerResult + 'static {}
+impl<F: FnMut(&str) -> HandlerResult + 'static> AggregatedTextCallback for F {}
 
-pub(crate) trait CommentCallback: FnMut(&mut Comment<'_>) + 'static {}
-impl<F: FnMut(&mut Comment<'_>) + 'static> CommentCallback for F {}
+pub(crate) trait CommentCallback: FnMut(&mut Comment<'_>) -> HandlerResult + 'static {}
+impl<F: FnMut(&mut Comment<'_>) -> HandlerResult + 'static> CommentCallback for F {}
 
 /// A [`Step`] compiled into indices into [`State`].
 enum Test {
@@ -157,11 +157,11 @@ impl Program {
 ///
 /// `node_id` is the canonical DOM node for this enter (same value for every chain that
 /// matches the element). Wrap with plan `NodeId::new` — not an [`InstanceId`].
-pub(crate) trait EnterCallback: for<'r, 't> FnMut(InstanceId, u64, u32, &mut El<'r, 't>) + 'static {}
-impl<F: for<'r, 't> FnMut(InstanceId, u64, u32, &mut El<'r, 't>) + 'static> EnterCallback for F {}
+pub(crate) trait EnterCallback: for<'r, 't> FnMut(InstanceId, u64, u32, &mut El<'r, 't>) -> HandlerResult + 'static {}
+impl<F: for<'r, 't> FnMut(InstanceId, u64, u32, &mut El<'r, 't>) -> HandlerResult + 'static> EnterCallback for F {}
 
-pub(crate) trait ExitCallback: FnMut(InstanceId) + 'static {}
-impl<F: FnMut(InstanceId) + 'static> ExitCallback for F {}
+pub(crate) trait ExitCallback: FnMut(InstanceId) -> HandlerResult + 'static {}
+impl<F: FnMut(InstanceId) -> HandlerResult + 'static> ExitCallback for F {}
 
 type SharedTextCallback = Rc<RefCell<Box<dyn AggregatedTextCallback>>>;
 type SharedExitCallback = Rc<RefCell<Box<dyn ExitCallback>>>;
@@ -443,10 +443,10 @@ impl Engine {
                             (ended, text)
                         };
                         if let Some(text) = &text {
-                            on_text.as_ref().unwrap().borrow_mut()(text);
+                            on_text.as_ref().unwrap().borrow_mut()(text)?;
                         }
                         if let Some(callback) = &on_exit {
-                            callback.borrow_mut()(ended);
+                            callback.borrow_mut()(ended)?;
                         }
                         Ok(())
                     }));
@@ -455,16 +455,16 @@ impl Engine {
             }
             for (chain_id, instance, node_id, depth, exit_now) in pending {
                 if let Some(callback) = on_match[chain_id].as_mut() {
-                    callback(el);
+                    callback(el)?;
                 }
                 if let Some(callback) = on_enter[chain_id].as_mut() {
-                    callback(instance, node_id, depth, el);
+                    callback(instance, node_id, depth, el)?;
                 }
                 if !exit_now {
                     continue;
                 }
                 if let Some(callback) = &on_exit[chain_id] {
-                    callback.borrow_mut()(instance);
+                    callback.borrow_mut()(instance)?;
                 }
             }
             Ok(())
@@ -485,7 +485,7 @@ impl Engine {
                         if !open[chain_id] {
                             continue;
                         }
-                        callback(chunk);
+                        callback(chunk)?;
                     }
                     if has_aggregated_any {
                         let store = open.iter().enumerate().any(|(chain_id, &is_open)| is_open && aggregated_flags_for_text[chain_id]);
@@ -513,7 +513,7 @@ impl Engine {
                         if !open[chain_id] {
                             continue;
                         }
-                        callback(comment);
+                        callback(comment)?;
                     }
                     Ok(())
                 })
