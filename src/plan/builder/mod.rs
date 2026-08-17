@@ -1,6 +1,6 @@
-//! Hand builder: typed sugar → logical IR.
+//! Hand builder: typed sugar -> [`Plan`](crate::plan::Plan).
 //!
-//! Flat subset: `root` → `find`/`expand` → `attr` → `map` → `fold` → `build_plan`.
+//! Flat subset: `root` -> `find`/`expand` -> `attr` -> `map` -> `fold` -> `build_plan`.
 
 #![allow(dead_code)]
 

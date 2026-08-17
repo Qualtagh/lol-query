@@ -1,16 +1,16 @@
 //! Offline relational denotation on the scraper facade.
 //!
-//! Evaluates a frozen [`Plan`] to an ordered sequence of values (via Fold → Return).
+//! Evaluates a frozen [`Plan`] to an ordered sequence of values (via Fold -> Return).
 //! Emits logical order immediately; no readiness buffering.
 
 use std::collections::HashMap;
 
 use super::dom::Dom;
 use super::path;
-use crate::plan::registry::{Registry, Value};
 use crate::plan::representation::expr::{Expr, Projection};
 use crate::plan::representation::id::{ColId, NodeId, OccurrenceId, OrderKey, RelationId};
-use crate::plan::representation::relational::{Plan, RelationalOperator};
+use crate::plan::representation::registry::{Registry, Value};
+use crate::plan::representation::relational::{Graph, RelationalOperator};
 
 #[derive(Debug, Clone)]
 struct Row {
@@ -21,12 +21,12 @@ struct Row {
     cols: HashMap<ColId, Value>,
 }
 
-/// Evaluate `plan.ret` on `dom`.
-pub(crate) fn eval(dom: &Dom, plan: &Plan, registry: &Registry) -> Value {
-    let Some(ret) = &plan.ret else {
+/// Evaluate `graph.ret` on `dom`.
+pub(crate) fn eval(dom: &Dom, graph: &Graph, registry: &Registry) -> Value {
+    let Some(ret) = &graph.ret else {
         return Value::Unit;
     };
-    let mut state = State { dom, plan, registry, relation_cache: HashMap::new(), next_occurrence: 0, next_order: 0 };
+    let mut state = State { dom, graph, registry, relation_cache: HashMap::new(), next_occurrence: 0, next_order: 0 };
     let rows = state.relation(ret.input);
     assert!(rows.len() == 1, "Return expects a single input row (Fold result); got {}", rows.len());
     let row = rows[0].clone();
@@ -35,7 +35,7 @@ pub(crate) fn eval(dom: &Dom, plan: &Plan, registry: &Registry) -> Value {
 
 struct State<'a> {
     dom: &'a Dom,
-    plan: &'a Plan,
+    graph: &'a Graph,
     registry: &'a Registry,
     relation_cache: HashMap<RelationId, Vec<Row>>,
     next_occurrence: u64,
@@ -73,7 +73,7 @@ impl State<'_> {
     }
 
     fn eval_rel(&mut self, id: RelationId) -> Vec<Row> {
-        match self.plan.rel(id) {
+        match self.graph.rel(id) {
             RelationalOperator::Root { output } => {
                 let mut cols = HashMap::new();
                 cols.insert(*output, Value::Node(self.dom.root()));

@@ -10,7 +10,7 @@ use super::id::{ApplyId, ColId, ParamId};
 /// Projection of a node column onto a scalar.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Projection {
-    /// Element attribute (missing → nullish at eval time).
+    /// Element attribute (missing -> nullish at eval time).
     Attr(Rc<str>),
     /// Aggregated descendant text (cheerio-like).
     Text,

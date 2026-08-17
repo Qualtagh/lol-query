@@ -105,7 +105,7 @@ fn engine() {
 
 #[test]
 fn shared_node_id() {
-    // same element → same node id on both chains; distinct elements → distinct ids
+    // same element -> same node id on both chains; distinct elements -> distinct ids
     check_enter_nodes(css("div"), css(".item"), r#"<div class="item" id="a"></div><div id="b"></div>"#, "a:0 b:1", "a:0");
 
     // nested matched elements get distinct node ids

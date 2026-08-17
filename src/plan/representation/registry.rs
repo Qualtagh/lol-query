@@ -1,13 +1,13 @@
 //! Caller-registered opaque Apply / Fold monoids and runtime scalar values.
 //!
-//! Lives outside the frozen IR: the plan stores only ids; bodies sit here.
+//! Bodies live here; the frozen graph stores only ids.
 
 #![allow(dead_code)]
 
 use std::rc::Rc;
 
-use super::representation::expr::Literal;
-use super::representation::id::{ApplyId, MonoidId, NodeId, ParamId};
+use super::expr::Literal;
+use super::id::{ApplyId, MonoidId, NodeId, ParamId};
 
 /// Runtime scalar / bag value.
 #[derive(Debug, Clone, PartialEq, Eq)]

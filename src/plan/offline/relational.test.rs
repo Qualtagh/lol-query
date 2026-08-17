@@ -1,11 +1,12 @@
-use super::eval;
 use crate::matcher::MatchPattern;
-use crate::plan::offline::dom::Dom;
-use crate::plan::registry::{Registry, Value};
+use crate::plan::Plan;
+use crate::plan::offline::eval::EvalExt;
 use crate::plan::representation::expr::Expr;
 use crate::plan::representation::id::{ColId, MonoidId, RelationId};
 use crate::plan::representation::path::Path;
-use crate::plan::representation::relational::{Plan, RelationalOperator, Return};
+use crate::plan::representation::registry::{Registry, Value};
+use crate::plan::representation::relational::{Graph, RelationalOperator, Return};
+use crate::plan::test_util::unwrap_or_empty_str;
 
 fn css(selector: &str) -> Path {
     Path::find(MatchPattern::new().css(selector))
@@ -13,15 +14,6 @@ fn css(selector: &str) -> Path {
 
 fn strings(value: &Value) -> Vec<&str> {
     value.as_list().expect("expected List").iter().map(|v| v.as_str().expect("expected Str")).collect()
-}
-
-/// Caller-side `unwrap_or_default` for missing attrs (`Null` → `""`).
-fn unwrap_or_empty_str(args: &[Value]) -> Value {
-    assert!(args.len() == 1, "unwrap_or_empty_str expects one argument");
-    match &args[0] {
-        Value::Null => Value::str(""),
-        other => other.clone(),
-    }
 }
 
 fn register_list_push(registry: &mut Registry) -> MonoidId {
@@ -47,10 +39,11 @@ fn register_list_push(registry: &mut Registry) -> MonoidId {
 /// }
 /// ```
 ///
-/// Plan: Root → Expand(C*;[.item]) → Project(Apply(unwrap, Field id)) → Fold → Return
-fn item_ids_plan(registry: &mut Registry) -> Plan {
+/// Plan: Root -> Expand(C*;[.item]) -> Project(Apply(unwrap, Field id)) -> Fold -> Return
+fn item_ids_plan() -> Plan {
+    let mut registry = Registry::new();
     let unwrap = registry.register_apply(unwrap_or_empty_str);
-    let list = register_list_push(registry);
+    let list = register_list_push(&mut registry);
 
     let root_col = ColId::new(0);
     let el_col = ColId::new(1);
@@ -62,7 +55,7 @@ fn item_ids_plan(registry: &mut Registry) -> Plan {
     let ids = RelationId::new(2);
     let bag = RelationId::new(3);
 
-    Plan::new(
+    let graph = Graph::new(
         [
             RelationalOperator::root(root_col),
             RelationalOperator::expand(root, root_col, el_col, css(".item")),
@@ -71,29 +64,27 @@ fn item_ids_plan(registry: &mut Registry) -> Plan {
         ],
         [],
         Some(Return::new(bag, Expr::col(bag_col))),
-    )
+    );
+    Plan::new(graph, registry)
 }
 
 #[test]
 fn collect_item_ids() {
-    let mut registry = Registry::new();
-    let plan = item_ids_plan(&mut registry);
+    let plan = item_ids_plan();
 
     let flat = r#"
         <div class="item" id="a"></div>
         <span>skip</span>
         <div class="item" id="b"></div>
         <div class="item"></div>
-    "#;
-    let dom = Dom::parse_fragment(flat);
-    assert_eq!(strings(&eval(&dom, &plan, &registry)), ["a", "b", ""]);
+        "#;
+    assert_eq!(strings(&plan.eval(flat)), ["a", "b", ""]);
 
     let nested = r#"
         <div class="item" id="outer">
             <div class="item" id="inner"></div>
         </div>
         <div class="item" id="sibling"></div>
-    "#;
-    let dom = Dom::parse_fragment(nested);
-    assert_eq!(strings(&eval(&dom, &plan, &registry)), ["outer", "inner", "sibling"]);
+        "#;
+    assert_eq!(strings(&plan.eval(nested)), ["outer", "inner", "sibling"]);
 }

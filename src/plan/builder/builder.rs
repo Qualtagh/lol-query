@@ -4,11 +4,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::matcher::MatchPattern;
-use crate::plan::registry::{Registry, Value};
+use crate::plan::Plan;
 use crate::plan::representation::expr::Expr;
 use crate::plan::representation::id::{ColId, RelationId};
 use crate::plan::representation::path::{NodeTest, Path};
-use crate::plan::representation::relational::{Plan, RelationalOperator, Return};
+use crate::plan::representation::registry::{Registry, Value};
+use crate::plan::representation::relational::{Graph, RelationalOperator, Return};
 
 struct Inner {
     relations: Vec<RelationalOperator>,
@@ -35,7 +36,7 @@ impl Inner {
     }
 }
 
-/// Builds a logical [`Plan`] plus its opaque [`Registry`].
+/// Builds a logical [`Plan`] (graph + registry).
 #[derive(Clone)]
 pub(crate) struct Builder {
     inner: Rc<RefCell<Inner>>,
@@ -84,7 +85,7 @@ impl ScopeRef {
         ScopeRef { inner: self.inner.clone(), relation, node: to }
     }
 
-    /// Attribute field (missing → [`Value::Null`] at eval).
+    /// Attribute field (missing -> [`Value::Null`] at eval).
     pub(crate) fn attr(&self, name: impl AsRef<str>) -> ValueRef {
         self.inner.borrow().ensure_open();
         ValueRef { inner: self.inner.clone(), relation: self.relation, expr: Expr::attr(self.node, name) }
@@ -138,20 +139,21 @@ impl ValueRef {
         ValueRef { inner: self.inner, relation, expr: Expr::col(output) }
     }
 
-    /// Freeze the IR graph and take the registry.
+    /// Freeze the IR graph and registry into a [`Plan`].
     ///
+    /// Same plan feeds offline eval [`EvalExt`](crate::plan::offline::eval::EvalExt) and streaming [`StreamingExt`](crate::plan::shell::StreamingExt).
     /// Expects a single-row result (typically after [`Self::fold`]).
-    pub(crate) fn build_plan(self) -> (Plan, Registry) {
+    pub(crate) fn build_plan(self) -> Plan {
         let mut inner = self.inner.borrow_mut();
         inner.ensure_open();
         assert!(
             matches!(inner.relations.get(self.relation.raw() as usize), Some(RelationalOperator::Fold { .. })),
             "build_plan expects a Fold result (call fold() first)"
         );
-        let plan = Plan::new(std::mem::take(&mut inner.relations), [], Some(Return::new(self.relation, self.expr)));
+        let graph = Graph::new(std::mem::take(&mut inner.relations), [], Some(Return::new(self.relation, self.expr)));
         let registry = std::mem::replace(&mut inner.registry, Registry::new());
         inner.finished = true;
-        (plan, registry)
+        Plan::new(graph, registry)
     }
 }
 

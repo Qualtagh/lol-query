@@ -16,9 +16,9 @@ type EgoId = ego_tree::NodeId;
 #[derive(Debug, Clone)]
 pub(crate) struct Dom {
     html: Html,
-    /// Plan id → scraper ego-tree id. Dense from 0.
+    /// Plan id -> scraper ego-tree id. Dense from 0.
     by_plan: Vec<EgoId>,
-    /// Scraper ego-tree id → plan id raw.
+    /// Scraper ego-tree id -> plan id raw.
     by_ego: HashMap<EgoId, u64>,
     root: NodeId,
 }

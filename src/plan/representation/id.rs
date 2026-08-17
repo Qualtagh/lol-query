@@ -46,7 +46,7 @@ opaque_id! {
 }
 
 opaque_id! {
-    /// Index of a relation node in a frozen [`super::rel::Plan`] graph.
+    /// Index of a relation node in a frozen [`super::relational::Graph`].
     RelationId
 }
 
@@ -68,11 +68,11 @@ opaque_id! {
 }
 
 opaque_id! {
-    /// Caller-registered fold monoid `(identity, append)` for [`super::rel::Rel::Fold`].
+    /// Caller-registered fold monoid `(identity, append)` for Fold.
     MonoidId
 }
 
 opaque_id! {
-    /// Caller closure scheduled by a [`super::rel::Sink`] (lives outside the IR).
+    /// Caller closure scheduled by a Sink (lives outside the IR).
     SinkId
 }

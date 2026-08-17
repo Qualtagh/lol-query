@@ -1,7 +1,7 @@
 use scraper::Selector;
 
 use super::Dom;
-use crate::plan::offline::test_util::at;
+use crate::plan::test_util::at;
 
 fn frag(html: &str) -> Dom {
     Dom::parse_fragment(html)

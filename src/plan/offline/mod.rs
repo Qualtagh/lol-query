@@ -5,9 +5,7 @@
 
 #![allow(dead_code)]
 
-#[cfg(test)]
-mod test_util;
-
 pub(crate) mod dom;
+pub(crate) mod eval;
 pub(crate) mod path;
 pub(crate) mod relational;

@@ -34,6 +34,13 @@ impl Frames {
         self.open[stack].pop()
     }
 
+    /// Innermost open frame on `stack`, if any.
+    pub fn peek(&self, stack: usize) -> Option<&Frame> {
+        self.open[stack].last()
+    }
+
+    // TODO: supplement with a hash map when it needs to be used outside of tests too.
+    #[cfg(test)]
     pub fn frame_mut(&mut self, stack: usize, instance: InstanceId) -> &mut Frame {
         self.open[stack].iter_mut().rev().find(|frame| frame.instance == instance).expect("missing frame")
     }

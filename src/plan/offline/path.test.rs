@@ -1,9 +1,9 @@
 use super::eval;
 use crate::matcher::MatchPattern;
 use crate::plan::offline::dom::Dom;
-use crate::plan::offline::test_util::at;
 use crate::plan::representation::id::NodeId;
 use crate::plan::representation::path::{NodeTest, Path};
+use crate::plan::test_util::at;
 
 fn frag(html: &str) -> Dom {
     Dom::parse_fragment(html)

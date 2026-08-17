@@ -2,20 +2,25 @@
 //!
 //! - [`physical`] - kernels for the streaming rewrite: downward birth
 //!   gating (`down_ok`), scope-tree ancestry, and activation frames.
-//! - [`representation`] - identity keys, path AST, expr/rel IR, frozen plan graph.
-//! - [`registry`] - opaque Apply / Fold monoids and runtime values.
-//! - [`builder`] - typed hand API → logical IR (flat subset).
-//! - [`offline`] - full-DOM facade over `scraper`, path denotation, and flat
-//!   relational eval (test reference; later runtime mode).
+//! - [`representation`] - ids, path, expr, registry, graph, finalized [`Plan`].
+//! - [`builder`] - typed hand API -> [`Plan`] (flat subset).
+//! - [`offline`] - full-DOM facade.
+//! - [`lower`] / [`runtime`] / [`shell`] - streaming lower.
 //!
 //! ## Later
 //!
-//! Lowering onto Engine, and a public `Plan` shell.
+//! Nested Expand, ancestry combine, Sink, up/side axes.
 
 mod builder;
+mod lower;
 mod physical;
-mod registry;
 mod representation;
+mod runtime;
+mod shell;
 
 #[cfg(test)]
 mod offline;
+#[cfg(test)]
+mod test_util;
+
+pub(crate) use representation::plan::Plan;

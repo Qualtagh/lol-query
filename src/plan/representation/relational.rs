@@ -1,6 +1,7 @@
 //! Ordered-bag relational IR and the frozen plan graph.
 //!
-//! `Return` / `Sink` sit on [`Plan`] - they schedule observation, not DOM opcodes.
+//! `Return` / `Sink` sit on [`Graph`] - they schedule observation, not DOM opcodes.
+//! Pair a graph with a [`Registry`](super::Registry) via [`super::Plan`].
 
 use super::expr::Expr;
 use super::id::{ColId, MonoidId, RelationId, SinkId};
@@ -120,18 +121,18 @@ impl Sink {
     }
 }
 
-/// Frozen logical plan: immutable after build.
+/// Frozen relational graph: immutable after build (no registry).
 ///
 /// `relations[i]` is the node addressed by [`RelationId::new`]`(i)`.
 #[derive(Debug, Clone)]
-pub(crate) struct Plan {
+pub(crate) struct Graph {
     pub(crate) relations: Box<[RelationalOperator]>,
     pub(crate) sinks: Box<[Sink]>,
     /// `None` means `Return(())` (sinks-only / unit plan).
     pub(crate) ret: Option<Return>,
 }
 
-impl Plan {
+impl Graph {
     pub(crate) fn new(relations: impl Into<Box<[RelationalOperator]>>, sinks: impl Into<Box<[Sink]>>, ret: Option<Return>) -> Self {
         Self { relations: relations.into(), sinks: sinks.into(), ret }
     }
