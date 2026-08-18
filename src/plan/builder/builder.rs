@@ -76,6 +76,16 @@ impl ScopeRef {
         self.find(MatchPattern::new().css(selector))
     }
 
+    /// Immediate element children (`C`).
+    pub(crate) fn children(&self) -> ScopeRef {
+        self.expand(Path::child_axis())
+    }
+
+    /// Immediate children matching a CSS selector (`C;[css]`).
+    pub(crate) fn children_css(&self, selector: impl Into<String>) -> ScopeRef {
+        self.expand(Path::children(MatchPattern::new().css(selector)))
+    }
+
     /// Correlated path expand from this scope's node column.
     pub(crate) fn expand(&self, path: Path) -> ScopeRef {
         let mut inner = self.inner.borrow_mut();

@@ -49,9 +49,9 @@ fn plan_streaming_take() {
     // Plan-owned Fold/Return: result via take(), not a Vec closed over in on_each.
     check_ids(
         r#"
-        <div class="item" id="a"></div>
-        <span>skip</span>
-        <div class="item" id="b"></div>
+            <div class="item" id="a"></div>
+            <span>skip</span>
+            <div class="item" id="b"></div>
         "#,
         &["a", "b"],
     );
@@ -59,9 +59,9 @@ fn plan_streaming_take() {
     // Missing attr -> Null -> map to "" inside the plan (Apply), then fold.
     check_ids(
         r#"
-        <div class="item" id="a"></div>
-        <div class="item"></div>
-        <div class="item" id="c"></div>
+            <div class="item" id="a"></div>
+            <div class="item"></div>
+            <div class="item" id="c"></div>
         "#,
         &["a", "", "c"],
     );
@@ -69,8 +69,8 @@ fn plan_streaming_take() {
     // Field(tag) fold — same handlers/take surface, different projection.
     check_tags(
         r#"
-        <div class="item" id="a"></div>
-        <span class="item" id="b"></span>
+            <div class="item" id="a"></div>
+            <span class="item" id="b"></span>
         "#,
         &["div", "span"],
     );
@@ -78,8 +78,8 @@ fn plan_streaming_take() {
     // Chained Apply before Fold (Matcher has no plan-level map pipeline / Return).
     check_prefixed(
         r#"
-        <div class="item" id="a"></div>
-        <div class="item" id="b"></div>
+            <div class="item" id="a"></div>
+            <div class="item" id="b"></div>
         "#,
         &["id:a", "id:b"],
     );

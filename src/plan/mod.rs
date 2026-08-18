@@ -3,13 +3,13 @@
 //! - [`physical`] - kernels for the streaming rewrite: downward birth
 //!   gating (`down_ok`), scope-tree ancestry, and activation frames.
 //! - [`representation`] - ids, path, expr, registry, graph, finalized [`Plan`].
-//! - [`builder`] - typed hand API -> [`Plan`] (flat subset).
-//! - [`offline`] - full-DOM facade.
+//! - [`builder`] - typed hand API -> [`Plan`].
+//! - [`offline`] - full-DOM facade and relational eval.
 //! - [`lower`] / [`runtime`] / [`shell`] - streaming lower.
 //!
 //! ## Later
 //!
-//! Nested Expand, ancestry combine, Sink, up/side axes.
+//! Streaming nested Expand, ancestry combine, Sink, up/side axes.
 
 mod builder;
 mod lower;

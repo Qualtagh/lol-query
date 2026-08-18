@@ -35,20 +35,20 @@ fn check_seq(html: &str, expected: &[&str]) {
 fn flat_expand_fold_return() {
     check_seq(
         r#"
-        <div class="item" id="a"></div>
-        <span>skip</span>
-        <div class="item" id="b"></div>
-        <div class="item"></div>
+            <div class="item" id="a"></div>
+            <span>skip</span>
+            <div class="item" id="b"></div>
+            <div class="item"></div>
         "#,
         &["a", "b", ""],
     );
 
     check_seq(
         r#"
-        <div class="item" id="outer">
-            <div class="item" id="inner"></div>
-        </div>
-        <div class="item" id="sibling"></div>
+            <div class="item" id="outer">
+                <div class="item" id="inner"></div>
+            </div>
+            <div class="item" id="sibling"></div>
         "#,
         &["outer", "inner", "sibling"],
     );

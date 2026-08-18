@@ -16,6 +16,10 @@ fn strings(value: &Value) -> Vec<&str> {
     value.as_list().expect("expected List").iter().map(|v| v.as_str().expect("expected Str")).collect()
 }
 
+fn check(plan: &Plan, html: &str, expected: &[&str]) {
+    assert_eq!(strings(&plan.eval(html)), expected);
+}
+
 fn register_list_push(registry: &mut Registry) -> MonoidId {
     registry.register_monoid(Value::List(Vec::new()), |acc, item| {
         let Value::List(mut xs) = acc else {
@@ -72,19 +76,25 @@ fn item_ids_plan() -> Plan {
 fn collect_item_ids() {
     let plan = item_ids_plan();
 
-    let flat = r#"
-        <div class="item" id="a"></div>
-        <span>skip</span>
-        <div class="item" id="b"></div>
-        <div class="item"></div>
-        "#;
-    assert_eq!(strings(&plan.eval(flat)), ["a", "b", ""]);
+    check(
+        &plan,
+        r#"
+            <div class="item" id="a"></div>
+            <span>skip</span>
+            <div class="item" id="b"></div>
+            <div class="item"></div>
+        "#,
+        &["a", "b", ""],
+    );
 
-    let nested = r#"
-        <div class="item" id="outer">
-            <div class="item" id="inner"></div>
-        </div>
-        <div class="item" id="sibling"></div>
-        "#;
-    assert_eq!(strings(&plan.eval(nested)), ["outer", "inner", "sibling"]);
+    check(
+        &plan,
+        r#"
+            <div class="item" id="outer">
+                <div class="item" id="inner"></div>
+            </div>
+            <div class="item" id="sibling"></div>
+        "#,
+        &["outer", "inner", "sibling"],
+    );
 }

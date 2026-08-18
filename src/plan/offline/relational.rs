@@ -2,6 +2,7 @@
 //!
 //! Evaluates a frozen [`Plan`] to an ordered sequence of values (via Fold -> Return).
 //! Emits logical order immediately; no readiness buffering.
+//! Expand clones the source row and binds `to`, so nested Expand keeps outer columns.
 
 use std::collections::HashMap;
 
